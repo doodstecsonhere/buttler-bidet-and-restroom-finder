@@ -25,6 +25,7 @@ export default function Home() {
   const [bidetsOnly, setBidetsOnly] = useState(false);
   const [publicOnly, setPublicOnly] = useState(false);
   const [auditTarget, setAuditTarget] = useState<Restroom | null>(null);
+  const hasActiveFilters = search.trim() !== "" || bidetsOnly || publicOnly;
 
   const auditedIds = useMemo(() => {
     if (!auditsMap) return new Set<number>();
@@ -178,6 +179,19 @@ export default function Home() {
               Public Only
             </button>
           </div>
+          {hasActiveFilters && (
+            <button
+              type="button"
+              onClick={() => {
+                setSearch("");
+                setBidetsOnly(false);
+                setPublicOnly(false);
+              }}
+              className="w-full py-1 text-xs font-semibold text-primary hover:text-primary/80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 rounded-lg transition-colors"
+            >
+              Clear filters
+            </button>
+          )}
         </div>
 
         {/* List header */}
