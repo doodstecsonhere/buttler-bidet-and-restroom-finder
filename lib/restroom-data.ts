@@ -1,3 +1,4 @@
+// Provider-neutral catalogue shared by the legacy API and the static PWA.
 export interface Restroom {
   id: number;
   name: string;

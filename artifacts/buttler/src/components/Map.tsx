@@ -21,9 +21,6 @@ interface MapProps {
   userLocation: Location | null;
   geoError?: string | null;
   defaultCenter: [number, number];
-  auditedIds: Set<number>;
-  isAuthenticated: boolean;
-  onAuditClick: (restroom: Restroom) => void;
 }
 
 // ─── Icons ───────────────────────────────────────────────────────────────────
@@ -31,22 +28,18 @@ interface MapProps {
 const dropSvg = (color: string) =>
   `<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="${color}" stroke="none"><path d="M12 22a7 7 0 0 0 7-7c0-2-1-3.9-3-5.5s-3.5-4-4-6.5c-.5 2.5-2 4.9-4 6.5C6 11.1 5 13 5 15a7 7 0 0 0 7 7z"/></svg>`;
 
-const checkSvg = `<div style="position:absolute;top:-4px;right:-4px;width:14px;height:14px;background:#22c55e;border-radius:50%;border:2px solid white;display:flex;align-items:center;justify-content:center;"><svg xmlns="http://www.w3.org/2000/svg" width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg></div>`;
-
-function makeIcon(color: string, borderColor: string, audited: boolean) {
+function makeIcon(color: string, borderColor: string) {
   return L.divIcon({
     className: 'bg-transparent border-none',
-    html: `<div style="position:relative;width:36px;height:36px;background:white;border-radius:50%;display:flex;align-items:center;justify-content:center;box-shadow:0 2px 6px rgba(0,0,0,0.22);border:2.5px solid ${borderColor};">${dropSvg(color)}${audited ? checkSvg : ''}</div>`,
+    html: `<div style="position:relative;width:36px;height:36px;background:white;border-radius:50%;display:flex;align-items:center;justify-content:center;box-shadow:0 2px 6px rgba(0,0,0,0.22);border:2.5px solid ${borderColor};">${dropSvg(color)}</div>`,
     iconSize: [36, 36],
     iconAnchor: [18, 36],
     popupAnchor: [0, -38],
   });
 }
 
-const bidetIcon       = makeIcon('#d97706', '#d97706', false);
-const bidetAuditedIcon = makeIcon('#d97706', '#d97706', true);
-const noDropIcon       = makeIcon('#64748b', '#94a3b8', false);
-const noDropAuditedIcon = makeIcon('#64748b', '#94a3b8', true);
+const bidetIcon = makeIcon('#d97706', '#d97706');
+const noDropIcon = makeIcon('#64748b', '#94a3b8');
 
 // Pulsing green dot — strictly required to stand out against gold/blue-gray markers.
 const greenUserIcon = L.divIcon({
@@ -256,9 +249,6 @@ export function Map({
   userLocation,
   geoError,
   defaultCenter,
-  auditedIds,
-  isAuthenticated,
-  onAuditClick,
 }: MapProps) {
   return (
     // Initial center = downtown Dumaguete at zoom 15.
@@ -283,10 +273,7 @@ export function Map({
       />
 
       {restrooms.map((restroom) => {
-        const audited = auditedIds.has(restroom.id);
-        const icon = restroom.bidet
-          ? (audited ? bidetAuditedIcon : bidetIcon)
-          : (audited ? noDropAuditedIcon : noDropIcon);
+        const icon = restroom.bidet ? bidetIcon : noDropIcon;
         const access = accessLabel(restroom.access);
 
         return (
@@ -321,15 +308,9 @@ export function Map({
                 </div>
 
                 <div className="flex items-center gap-1.5 mb-2">
-                  {audited ? (
-                    <span style={{ fontSize: 11, fontWeight: 700, padding: '2px 8px', borderRadius: 99, background: '#dcfce7', color: '#16a34a', display: 'flex', alignItems: 'center', gap: 4 }}>
-                      <span>✓</span> Verified by Guardian
-                    </span>
-                  ) : (
-                    <span style={{ fontSize: 11, fontWeight: 600, padding: '2px 8px', borderRadius: 99, background: '#f1f5f9', color: '#94a3b8' }}>
-                      Unverified / Community Data
-                    </span>
-                  )}
+                  <span style={{ fontSize: 11, fontWeight: 600, padding: '2px 8px', borderRadius: 99, background: '#f1f5f9', color: '#64748b' }}>
+                    Check current conditions before relying on this listing
+                  </span>
                 </div>
 
                 <div className="flex items-center gap-2 mt-2">
@@ -341,14 +322,6 @@ export function Map({
                   >
                     Get Directions →
                   </a>
-                  {isAuthenticated && (
-                    <button
-                      onClick={() => onAuditClick(restroom)}
-                      style={{ marginLeft: 'auto', fontSize: 11, fontWeight: 700, padding: '4px 10px', borderRadius: 8, background: '#f59e0b', color: 'white', border: 'none', cursor: 'pointer' }}
-                    >
-                      Audit this Restroom
-                    </button>
-                  )}
                 </div>
               </div>
             </Popup>

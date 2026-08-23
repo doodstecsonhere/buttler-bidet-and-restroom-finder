@@ -31,3 +31,10 @@ pnpm run build
 ```
 
 Runtime services and environment variables will be documented as part of the migration assessment.
+
+## Read-only launch work
+
+The `codex/read-only-launch` branch contains a provider-independent frontend
+path that bundles the restroom catalogue directly with the PWA. It intentionally
+does not expose login or Guardian-audit controls and does not require a database
+connection. See [docs/read-only-launch.md](docs/read-only-launch.md).

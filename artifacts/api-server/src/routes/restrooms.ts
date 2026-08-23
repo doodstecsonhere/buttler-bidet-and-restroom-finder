@@ -1,5 +1,5 @@
 import { Router, type IRouter } from "express";
-import { RESTROOMS } from "../data/restrooms";
+import { RESTROOMS } from "../../../../lib/restroom-data";
 
 const router: IRouter = Router();
 
