@@ -31,3 +31,7 @@ pnpm run build
 ```
 
 Runtime services and environment variables will be documented as part of the migration assessment.
+
+See [docs/replit-independence.md](docs/replit-independence.md) for the verified
+migration boundary, zero-dollar deployment options, and approval-gated next
+steps. Database schema changes are never run automatically after a Git merge.
