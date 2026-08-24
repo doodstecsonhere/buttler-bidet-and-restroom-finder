@@ -1,36 +1,22 @@
-import { useMemo, useState, useCallback } from "react";
-import { useGetAudits } from "@workspace/api-client-react";
+import { useMemo, useState } from "react";
 import { useOfflineRestrooms } from "@/hooks/use-offline-restrooms";
 import { useGeolocation } from "@/hooks/use-geolocation";
 import { calculateDistance } from "@/lib/distance";
 import { Map } from "@/components/Map";
-import type { Restroom } from "@/components/Map";
 import { RestroomCard } from "@/components/RestroomCard";
-import { AuditModal } from "@/components/AuditModal";
-import { MapPinOff, Loader2, Sparkles, Search, Droplets, Users, LogIn, LogOut, User, X, WifiOff } from "lucide-react";
+import { MapPinOff, Loader2, Sparkles, Search, Droplets, Users, X, WifiOff } from "lucide-react";
 import { motion } from "framer-motion";
-import { useAuth } from "@workspace/replit-auth-web";
-import { useQueryClient } from "@tanstack/react-query";
 
 const DUMAGUETE_CENTER: [number, number] = [9.317, 123.305];
 
 export default function Home() {
   const { data: restrooms, isLoading: restroomsLoading, error: restroomsError, isFromCache } = useOfflineRestrooms();
-  const { data: auditsMap, queryKey: auditsQueryKey } = useGetAudits();
   const { location, loading: geoLoading, error: geoError } = useGeolocation();
-  const { user, isAuthenticated, login, logout } = useAuth();
-  const queryClient = useQueryClient();
 
   const [search, setSearch] = useState("");
   const [bidetsOnly, setBidetsOnly] = useState(false);
   const [publicOnly, setPublicOnly] = useState(false);
-  const [auditTarget, setAuditTarget] = useState<Restroom | null>(null);
   const hasActiveFilters = search.trim() !== "" || bidetsOnly || publicOnly;
-
-  const auditedIds = useMemo(() => {
-    if (!auditsMap) return new Set<number>();
-    return new Set<number>(Object.keys(auditsMap).map(Number));
-  }, [auditsMap]);
 
   const sortedRestrooms = useMemo(() => {
     if (!restrooms) return [];
@@ -64,16 +50,6 @@ export default function Home() {
 
   const isGlobalLoading = restroomsLoading;
 
-  const handleAuditClick = useCallback((restroom: Restroom) => {
-    setAuditTarget(restroom);
-  }, []);
-
-  const handleAuditSuccess = useCallback(() => {
-    if (auditsQueryKey) {
-      queryClient.invalidateQueries({ queryKey: auditsQueryKey });
-    }
-  }, [queryClient, auditsQueryKey]);
-
   return (
     <div className="flex flex-col md:flex-row min-h-[100dvh] w-full bg-background overflow-hidden">
       {/* Mobile Header overlay on map */}
@@ -84,17 +60,9 @@ export default function Home() {
             <h1 className="font-display font-bold text-base text-foreground leading-none">Buttler</h1>
             <p className="text-primary font-medium text-[10px] tracking-wide uppercase truncate">Bidet & Restroom Finder</p>
           </div>
-          {isAuthenticated ? (
-            <button onClick={logout} className="flex items-center gap-1 text-xs font-medium text-muted-foreground hover:text-foreground transition-colors px-2 py-1.5 rounded-xl hover:bg-white/80 flex-shrink-0">
-              <User className="w-3.5 h-3.5" />
-              <LogOut className="w-3 h-3" />
-            </button>
-          ) : (
-            <button onClick={login} className="flex items-center gap-1 text-xs font-semibold text-primary hover:text-primary/80 transition-colors px-2 py-1.5 rounded-xl bg-primary/10 hover:bg-primary/20 flex-shrink-0">
-              <LogIn className="w-3.5 h-3.5" />
-              Log in
-            </button>
-          )}
+          <span className="text-[10px] font-semibold text-sky-700 bg-sky-100 px-2 py-1 rounded-full flex-shrink-0">
+            Read-only
+          </span>
         </div>
       </div>
 
@@ -105,9 +73,6 @@ export default function Home() {
           userLocation={location}
           geoError={geoError}
           defaultCenter={DUMAGUETE_CENTER}
-          auditedIds={auditedIds}
-          isAuthenticated={isAuthenticated}
-          onAuditClick={handleAuditClick}
         />
       </div>
 
@@ -123,27 +88,9 @@ export default function Home() {
               Bidet & Restroom Finder
             </p>
           </div>
-          {isAuthenticated ? (
-            <div className="flex items-center gap-2">
-              {user?.profileImageUrl ? (
-                <img src={user.profileImageUrl} alt="Profile" className="w-7 h-7 rounded-full object-cover" />
-              ) : (
-                <div className="w-7 h-7 rounded-full bg-primary/10 flex items-center justify-center">
-                  <User className="w-3.5 h-3.5 text-primary" />
-                </div>
-              )}
-              <span className="text-sm font-medium text-foreground">{user?.firstName ?? "User"}</span>
-              <button onClick={logout} className="flex items-center gap-1 text-xs font-medium text-muted-foreground hover:text-foreground transition-colors px-2.5 py-1.5 rounded-xl hover:bg-muted">
-                <LogOut className="w-3.5 h-3.5" />
-                Log out
-              </button>
-            </div>
-          ) : (
-            <button onClick={login} className="flex items-center gap-1.5 text-xs font-semibold text-white bg-primary hover:bg-primary/90 transition-colors px-3 py-2 rounded-xl shadow-sm">
-              <LogIn className="w-3.5 h-3.5" />
-              Log in
-            </button>
-          )}
+          <span className="text-xs font-semibold text-sky-700 bg-sky-100 px-3 py-1.5 rounded-full">
+            Read-only launch
+          </span>
         </div>
 
         {/* Search + Filters */}
@@ -216,7 +163,7 @@ export default function Home() {
           {isFromCache && (
             <div className="p-3 bg-amber-50 border border-amber-200 rounded-2xl flex gap-3 text-sm text-amber-800">
               <WifiOff className="w-4 h-4 text-amber-500 shrink-0 mt-0.5" />
-              <p>You're offline — showing cached restroom data. Search and filters still work.</p>
+              <p>You're offline — the bundled restroom catalogue, search, and filters still work.</p>
             </div>
           )}
 
@@ -252,21 +199,13 @@ export default function Home() {
                 bidet={restroom.bidet}
                 distance={restroom.distance}
                 index={idx}
-                audited={auditedIds.has(restroom.id)}
+                audited={false}
               />
             ))
           )}
         </div>
       </div>
 
-      {/* Audit Modal */}
-      {auditTarget && (
-        <AuditModal
-          restroom={auditTarget}
-          onClose={() => setAuditTarget(null)}
-          onSuccess={handleAuditSuccess}
-        />
-      )}
     </div>
   );
 }
