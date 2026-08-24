@@ -8,9 +8,18 @@ CREATE TABLE restroom_locations (
   longitude REAL NOT NULL CHECK (longitude BETWEEN -180 AND 180),
   address TEXT,
   access TEXT NOT NULL CHECK (
-    access IN ('public', 'customers', 'public/customers', 'unknown')
+    access IN (
+      'public',
+      'customers',
+      'public/customers',
+      'permissive',
+      'students/public',
+      'unknown'
+    )
   ),
-  fee TEXT NOT NULL CHECK (fee IN ('yes', 'no', 'unknown')),
+  fee TEXT NOT NULL CHECK (
+    fee IN ('yes', 'no', 'unknown', 'yes (approx. 2-5 PHP)')
+  ),
   has_bidet INTEGER NOT NULL DEFAULT 0 CHECK (has_bidet IN (0, 1)),
   record_status TEXT NOT NULL DEFAULT 'candidate' CHECK (
     record_status IN ('candidate', 'community-submitted', 'verified', 'disputed', 'outdated', 'rejected')

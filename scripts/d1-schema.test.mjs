@@ -1,12 +1,21 @@
 import assert from "node:assert/strict";
 import { readFileSync, readdirSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
+
+import { RESTROOMS } from "../lib/restroom-data.ts";
+import { generateSeedSql } from "./generate-d1-seed.mjs";
 const migrationDirectory = new URL("../d1/migrations/", import.meta.url);
 const rollbackPath = new URL(
   "../d1/rollback/0001_drop_restroom_locations.sql",
   import.meta.url,
 );
 const database = new DatabaseSync(":memory:");
+const seedPath = new URL(
+  "../d1/migrations/0002_seed_restroom_locations.sql",
+  import.meta.url,
+);
+
+assert.equal(readFileSync(seedPath, "utf8"), generateSeedSql());
 
 for (const filename of readdirSync(migrationDirectory)
   .filter((name) => name.endsWith(".sql"))
@@ -50,6 +59,50 @@ assert.deepEqual(
   ],
 );
 
+const seededRows = database
+  .prepare(
+    `
+    SELECT id, name, latitude, longitude, address, access, fee, has_bidet,
+           record_status, source_kind, source_reference, verified_at
+    FROM restroom_locations
+    ORDER BY id
+  `,
+  )
+  .all();
+
+assert.equal(seededRows.length, RESTROOMS.length);
+
+const sortedRestrooms = [...RESTROOMS].sort(
+  (left, right) => left.id - right.id,
+);
+for (const [index, row] of seededRows.entries()) {
+  const source = sortedRestrooms[index];
+  assert.deepEqual(
+    { ...row },
+    {
+      id: source.id,
+      name: source.name,
+      latitude: source.latitude,
+      longitude: source.longitude,
+      address: source.address,
+      access: source.access,
+      fee: source.fee,
+      has_bidet: source.bidet ? 1 : 0,
+      record_status: "candidate",
+      source_kind: "imported",
+      source_reference: "bundled-catalogue",
+      verified_at: null,
+    },
+  );
+}
+
+database.exec(readFileSync(seedPath, "utf8"));
+assert.equal(
+  database.prepare("SELECT count(*) AS count FROM restroom_locations").get()
+    .count,
+  RESTROOMS.length,
+);
+
 const insert = database.prepare(`
   INSERT INTO restroom_locations (
     id, name, latitude, longitude, address, access, fee, has_bidet,
@@ -57,8 +110,9 @@ const insert = database.prepare(`
   ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 `);
 
+const testId = Math.max(...RESTROOMS.map(({ id }) => id)) + 1;
 insert.run(
-  1,
+  testId,
   "Verified test restroom",
   9.3068,
   123.3054,
@@ -74,13 +128,13 @@ insert.run(
 assert.equal(
   database.prepare("SELECT count(*) AS count FROM restroom_locations").get()
     .count,
-  1,
+  RESTROOMS.length + 1,
 );
 
 assert.throws(
   () =>
     insert.run(
-      2,
+      testId + 1,
       "Invalid latitude",
       91,
       123.3,
@@ -98,7 +152,7 @@ assert.throws(
 assert.throws(
   () =>
     insert.run(
-      3,
+      testId + 2,
       "Invalid status",
       9.3,
       123.3,
@@ -116,7 +170,7 @@ assert.throws(
 assert.throws(
   () =>
     insert.run(
-      4,
+      testId + 3,
       "Unverified verified row",
       9.3,
       123.3,
