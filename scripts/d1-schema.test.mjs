@@ -15,7 +15,11 @@ const seedPath = new URL(
   import.meta.url,
 );
 
-assert.equal(readFileSync(seedPath, "utf8"), generateSeedSql());
+const normalizeLineEndings = (value) => value.replaceAll("\r\n", "\n");
+assert.equal(
+  normalizeLineEndings(readFileSync(seedPath, "utf8")),
+  normalizeLineEndings(generateSeedSql()),
+);
 
 for (const filename of readdirSync(migrationDirectory)
   .filter((name) => name.endsWith(".sql"))
