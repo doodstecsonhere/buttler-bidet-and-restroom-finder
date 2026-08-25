@@ -60,9 +60,13 @@ export default function Home() {
             <h1 className="font-display font-bold text-base text-foreground leading-none">Buttler</h1>
             <p className="text-primary font-medium text-[10px] tracking-wide uppercase truncate">Bidet & Restroom Finder</p>
           </div>
-          <span className="text-[10px] font-semibold text-sky-700 bg-sky-100 px-2 py-1 rounded-full flex-shrink-0">
-            Read-only
-          </span>
+          <button
+            type="button"
+            disabled
+            className="text-[10px] font-semibold text-sky-700 bg-sky-100 px-2 py-1 rounded-full flex-shrink-0 cursor-not-allowed opacity-75"
+          >
+            Log in — coming soon
+          </button>
         </div>
       </div>
 
@@ -88,9 +92,13 @@ export default function Home() {
               Bidet & Restroom Finder
             </p>
           </div>
-          <span className="text-xs font-semibold text-sky-700 bg-sky-100 px-3 py-1.5 rounded-full">
-            Read-only launch
-          </span>
+          <button
+            type="button"
+            disabled
+            className="text-xs font-semibold text-sky-700 bg-sky-100 px-3 py-1.5 rounded-full cursor-not-allowed opacity-75"
+          >
+            Log in — coming soon
+          </button>
         </div>
 
         {/* Search + Filters */}
