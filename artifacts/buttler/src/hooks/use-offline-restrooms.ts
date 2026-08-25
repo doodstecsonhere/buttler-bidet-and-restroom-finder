@@ -1,11 +1,16 @@
 /**
  * Offline-aware restroom data hook.
  *
- * The read-only launch bundles the owned catalogue with the PWA. It no longer
- * needs an API, database, network request, or localStorage copy to show places.
+ * The read-only launch first asks the same-origin read API for the D1 catalogue.
+ * The owned catalogue remains bundled so database, network, and binding errors
+ * cannot make the finder unusable.
  */
 
-import { RESTROOMS } from "../../../../lib/restroom-data";
+import { useEffect, useState } from "react";
+import {
+  loadRestrooms,
+  type LoadedRestrooms,
+} from "../../../../lib/restroom-loader";
 
 export interface CachedRestroom {
   id: number;
@@ -27,10 +32,22 @@ interface UseOfflineRestroomsResult {
 }
 
 export function useOfflineRestrooms(): UseOfflineRestroomsResult {
+  const [loaded, setLoaded] = useState<LoadedRestrooms | null>(null);
+
+  useEffect(() => {
+    let active = true;
+    void loadRestrooms().then((result) => {
+      if (active) setLoaded(result);
+    });
+    return () => {
+      active = false;
+    };
+  }, []);
+
   return {
-    data: RESTROOMS,
-    isLoading: false,
+    data: loaded?.data ?? null,
+    isLoading: loaded === null,
     error: null,
-    isFromCache: !navigator.onLine,
+    isFromCache: loaded?.source === "bundled",
   };
 }

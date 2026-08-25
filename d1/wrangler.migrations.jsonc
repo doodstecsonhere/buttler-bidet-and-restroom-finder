@@ -1,0 +1,14 @@
+{
+  "$schema": "https://raw.githubusercontent.com/cloudflare/workers-sdk/main/packages/wrangler/config-schema.json",
+  "name": "buttler-d1-migrations",
+  "account_id": "0cea501322aee10a0e7830ebe72b432a",
+  "compatibility_date": "2026-08-25",
+  "d1_databases": [
+    {
+      "binding": "BUTTLER_DB",
+      "database_name": "buttler-read-model",
+      "database_id": "e4586c2c-dd64-4b23-b1b6-da436c2125e6",
+      "migrations_dir": "migrations",
+    },
+  ],
+}
