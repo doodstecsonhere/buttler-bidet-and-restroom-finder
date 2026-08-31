@@ -388,7 +388,7 @@ export function Map({
 
       {!showStreetTiles && (
         <div
-          className="pointer-events-none absolute left-1/2 top-3 z-[500] w-[min(92%,28rem)] -translate-x-1/2 rounded-lg bg-slate-900/90 px-4 py-2 text-center text-xs font-medium text-white shadow-lg"
+          className="pointer-events-none absolute left-1/2 top-20 md:top-3 z-[500] w-[min(92%,28rem)] -translate-x-1/2 rounded-lg bg-slate-900/90 px-4 py-2 text-center text-xs font-medium text-white shadow-lg"
           role="status"
           aria-live="polite"
         >
