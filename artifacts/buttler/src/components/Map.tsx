@@ -335,6 +335,8 @@ export function Map({
             key={restroom.id}
             position={[restroom.latitude, restroom.longitude]}
             icon={icon}
+            title={restroom.name}
+            alt={`${restroom.name} restroom location`}
           >
             <Popup className="font-sans" minWidth={220}>
               <div className="py-1 px-0.5" style={{ minWidth: 200 }}>
