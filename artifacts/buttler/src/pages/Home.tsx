@@ -128,7 +128,7 @@ export default function Home() {
               type="button"
               onClick={() => setBidetsOnly((v) => !v)}
               aria-pressed={bidetsOnly}
-              className={`flex-1 flex items-center justify-center gap-1.5 py-1.5 rounded-xl text-xs font-semibold border transition-all ${bidetsOnly ? "bg-amber-500 border-amber-500 text-white shadow-sm" : "bg-muted/60 border-border/50 text-muted-foreground hover:border-amber-400 hover:text-amber-600"}`}
+              className={`flex-1 flex items-center justify-center gap-1.5 py-1.5 rounded-xl text-xs font-semibold border focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 transition-all ${bidetsOnly ? "bg-amber-500 border-amber-500 text-white shadow-sm" : "bg-muted/60 border-border/50 text-muted-foreground hover:border-amber-400 hover:text-amber-600"}`}
             >
               <Droplets className="w-3.5 h-3.5" />
               Bidets Only
@@ -137,7 +137,7 @@ export default function Home() {
               type="button"
               onClick={() => setPublicOnly((v) => !v)}
               aria-pressed={publicOnly}
-              className={`flex-1 flex items-center justify-center gap-1.5 py-1.5 rounded-xl text-xs font-semibold border transition-all ${publicOnly ? "bg-green-600 border-green-600 text-white shadow-sm" : "bg-muted/60 border-border/50 text-muted-foreground hover:border-green-500 hover:text-green-600"}`}
+              className={`flex-1 flex items-center justify-center gap-1.5 py-1.5 rounded-xl text-xs font-semibold border focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 transition-all ${publicOnly ? "bg-green-600 border-green-600 text-white shadow-sm" : "bg-muted/60 border-border/50 text-muted-foreground hover:border-green-500 hover:text-green-600"}`}
             >
               <Users className="w-3.5 h-3.5" />
               Public Only
