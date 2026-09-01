@@ -6,22 +6,17 @@ Buttler is a mobile-first progressive web app for finding bidets and restrooms i
 
 - Interactive restroom map with bidet and access indicators
 - Search and filters for bidets and public facilities
-- Directions, access details, and fee information
-- Read-only catalogue served from Cloudflare D1 with a bundled fallback
-- Offline-capable PWA shell, catalogue, search, filters, details, and marker map
+- Directions, access details, fees, and verification status
+- Guardian audits for community-maintained facility information
+- Offline-capable PWA experience
 
 ## Technology
 
-The public application uses React, TypeScript, Vite, Leaflet/OpenStreetMap,
-Cloudflare Pages, Cloudflare D1, and pnpm workspaces. Legacy Replit, Express,
-and PostgreSQL code remains in the repository for fallback and migration
-history but is not a dependency of the Cloudflare read-only application.
+React, TypeScript, Vite, Leaflet/OpenStreetMap, Express, PostgreSQL, Drizzle ORM, and pnpm workspaces.
 
 ## Development status
 
-This private repository is the independent source of truth for Buttler. The
-Cloudflare deployment operates independently, while the unchanged Replit
-deployment remains available as a separately hosted fallback.
+This private repository is the independent source of truth for Buttler. It retains the original revision history while the application is being migrated away from Replit.
 
 Migration work should be performed on feature branches and merged through reviewed pull requests.
 
@@ -39,8 +34,7 @@ Runtime services and environment variables will be documented as part of the mig
 
 ## Read-only launch work
 
-The public frontend first reads its catalogue from a same-origin, GET-only D1
-endpoint and falls back to the catalogue bundled with the PWA on any API or
-network failure. It intentionally does not expose login, Guardian-audit, or
-other public-write controls. See [docs/read-only-launch.md](docs/read-only-launch.md)
-and [docs/map-and-offline-policy.md](docs/map-and-offline-policy.md).
+The `codex/read-only-launch` branch contains a provider-independent frontend
+path that bundles the restroom catalogue directly with the PWA. It intentionally
+does not expose login or Guardian-audit controls and does not require a database
+connection. See [docs/read-only-launch.md](docs/read-only-launch.md).

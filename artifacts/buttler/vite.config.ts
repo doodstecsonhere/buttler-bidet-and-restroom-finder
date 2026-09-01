@@ -55,9 +55,40 @@ export default defineConfig({
         clientsClaim: true,
         globPatterns: ["**/*.{js,css,html,ico,png,svg,woff2}"],
         navigateFallback: "index.html",
-        // Remote map tiles are intentionally not precached or persisted by the
-        // service worker. Offline mode keeps the local catalogue and markers
-        // interactive without downloading tiles contrary to provider policy.
+        runtimeCaching: [
+          // ── Map tiles (CARTO) ── CacheFirst, 30-day TTL, 2000 tiles ─────────
+          // Zoom levels 13–18 over Dumaguete City.  Already-viewed tiles will
+          // render fully offline without any extra user action.
+          {
+            urlPattern: /^https:\/\/[a-z]\.basemaps\.cartocdn\.com\/.*/i,
+            handler: "CacheFirst",
+            options: {
+              cacheName: "map-tiles-carto",
+              expiration: {
+                maxEntries: 2000,
+                maxAgeSeconds: 60 * 60 * 24 * 30,
+              },
+              cacheableResponse: {
+                statuses: [0, 200],
+              },
+            },
+          },
+          // ── OSM tiles (fallback / future tile layer changes) ─────────────────
+          {
+            urlPattern: /^https:\/\/[a-z]\.tile\.openstreetmap\.org\/.*/i,
+            handler: "CacheFirst",
+            options: {
+              cacheName: "map-tiles-osm",
+              expiration: {
+                maxEntries: 2000,
+                maxAgeSeconds: 60 * 60 * 24 * 30,
+              },
+              cacheableResponse: {
+                statuses: [0, 200],
+              },
+            },
+          },
+        ],
       },
     }),
   ],
