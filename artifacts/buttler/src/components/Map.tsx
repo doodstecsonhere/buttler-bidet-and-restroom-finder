@@ -90,6 +90,31 @@ if (typeof document !== 'undefined' && !document.getElementById('buttler-pulse-s
 const LOCATE_MSG = 'Location access needed to show user location.';
 const STARTUP_ZOOM = 17;
 const FALLBACK_ZOOM = 15;
+const OSM_TILE_URL = 'https://tile.openstreetmap.org/{z}/{x}/{y}.png';
+const OSM_ATTRIBUTION = '&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener noreferrer">OpenStreetMap</a> contributors';
+
+function prefersReducedMotion() {
+  return typeof window !== 'undefined'
+    && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+}
+
+function useOnlineStatus() {
+  const [isOnline, setIsOnline] = useState(
+    typeof navigator === 'undefined' ? true : navigator.onLine,
+  );
+
+  useEffect(() => {
+    const updateStatus = () => setIsOnline(navigator.onLine);
+    window.addEventListener('online', updateStatus);
+    window.addEventListener('offline', updateStatus);
+    return () => {
+      window.removeEventListener('online', updateStatus);
+      window.removeEventListener('offline', updateStatus);
+    };
+  }, []);
+
+  return isOnline;
+}
 
 interface LocateButtonProps {
   autoLocation: Location | null;
@@ -120,7 +145,8 @@ function LocateButton({ autoLocation, autoError, fallbackCenter }: LocateButtonP
     hasFit.current = true;
     const coords: [number, number] = [autoLocation.lat, autoLocation.lng];
     setLocatedPos(coords);
-    map.flyTo(coords, STARTUP_ZOOM, { animate: true, duration: 1.0 });
+    if (prefersReducedMotion()) map.setView(coords, STARTUP_ZOOM);
+    else map.flyTo(coords, STARTUP_ZOOM, { animate: true, duration: 1.0 });
   }, [autoLocation, map]);
 
   useEffect(() => {
@@ -141,7 +167,8 @@ function LocateButton({ autoLocation, autoError, fallbackCenter }: LocateButtonP
         const coords: [number, number] = [pos.coords.latitude, pos.coords.longitude];
         setLocatedPos(coords);
         setLocating(false);
-        map.flyTo(coords, STARTUP_ZOOM, { animate: true, duration: 1.2 });
+        if (prefersReducedMotion()) map.setView(coords, STARTUP_ZOOM);
+        else map.flyTo(coords, STARTUP_ZOOM, { animate: true, duration: 1.2 });
       },
       () => { setLocating(false); showToast(LOCATE_MSG); },
       { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 },
@@ -250,20 +277,47 @@ export function Map({
   geoError,
   defaultCenter,
 }: MapProps) {
+  const isOnline = useOnlineStatus();
+  const [tileLayerFailed, setTileLayerFailed] = useState(false);
+
+  useEffect(() => {
+    if (isOnline) setTileLayerFailed(false);
+  }, [isOnline]);
+
+  const showStreetTiles = isOnline && !tileLayerFailed;
+  const mapStatus = isOnline
+    ? 'Street map unavailable. Restroom locations remain interactive.'
+    : 'You are offline. Restroom locations remain interactive; street tiles need an internet connection.';
+
   return (
     // Initial center = downtown Dumaguete at zoom 15.
     // LocateButton will immediately fly to the user if geolocation resolves,
     // or stay here if it fails — no fitBounds over all 1168 pins ever fires.
-    <MapContainer
-      center={defaultCenter}
-      zoom={15}
-      className="w-full h-full z-0"
-      zoomControl={false}
+    <section
+      className="relative w-full h-full overflow-hidden bg-slate-100"
+      role="region"
+      aria-label="Interactive restroom map"
+      style={{
+        backgroundImage: 'linear-gradient(rgba(148,163,184,0.18) 1px, transparent 1px), linear-gradient(90deg, rgba(148,163,184,0.18) 1px, transparent 1px)',
+        backgroundSize: '32px 32px',
+      }}
     >
-      <TileLayer
-        attribution='&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener noreferrer">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions" target="_blank" rel="noopener noreferrer">CARTO</a>'
-        url="https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png"
-      />
+      <MapContainer
+        center={defaultCenter}
+        zoom={15}
+        className="w-full h-full z-0"
+        zoomControl={false}
+        style={{ background: 'transparent' }}
+      >
+        {showStreetTiles && (
+          <TileLayer
+            attribution={OSM_ATTRIBUTION}
+            url={OSM_TILE_URL}
+            eventHandlers={{
+              tileerror: () => setTileLayerFailed(true),
+            }}
+          />
+        )}
 
       {/* Single component owns all user-location logic */}
       <LocateButton
@@ -281,6 +335,8 @@ export function Map({
             key={restroom.id}
             position={[restroom.latitude, restroom.longitude]}
             icon={icon}
+            title={restroom.name}
+            alt={`${restroom.name} restroom location`}
           >
             <Popup className="font-sans" minWidth={220}>
               <div className="py-1 px-0.5" style={{ minWidth: 200 }}>
@@ -328,6 +384,17 @@ export function Map({
           </Marker>
         );
       })}
-    </MapContainer>
+      </MapContainer>
+
+      {!showStreetTiles && (
+        <div
+          className="pointer-events-none absolute left-1/2 top-20 md:top-3 z-[500] w-[min(92%,28rem)] -translate-x-1/2 rounded-lg bg-slate-900/90 px-4 py-2 text-center text-xs font-medium text-white shadow-lg"
+          role="status"
+          aria-live="polite"
+        >
+          {mapStatus}
+        </div>
+      )}
+    </section>
   );
 }
