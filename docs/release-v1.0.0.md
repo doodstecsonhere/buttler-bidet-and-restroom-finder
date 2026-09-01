@@ -67,3 +67,84 @@ Cloudflare Pages Production, verify production in a fresh tab and disconnected
 session, create annotated tag `v1.0.0`, and publish the prepared GitHub Release.
 Any failed production verification stops the sequence before tagging or release
 publication and triggers the rollback procedure above.
+
+## Proposed tag target
+
+The tag target is not the feature-branch commit. After an expected-head-guarded
+merge and successful Production verification, annotated tag `v1.0.0` must point
+to the exact merged `master` commit that Cloudflare Production serves. Record
+that full commit ID before creating the tag. Never move or recreate the tag to
+hide a failed deployment.
+
+## Release checklist
+
+- [x] Work performed on a focused `codex/` branch.
+- [x] No Replit component changed.
+- [x] No new paid or charge-capable service, account, key, or dependency added.
+- [x] Type-check, focused tests, D1 tests, and Production build pass locally.
+- [x] Production-format PWA opens after a disconnected reload.
+- [x] Online and offline catalogue, search, filters, markers, details, and
+      directions behavior checked locally.
+- [x] Map provider policy, attribution, caching, offline-use, and traffic risks
+      documented.
+- [x] Tracked files and built frontend scanned for credential patterns.
+- [ ] Draft pull request created and reviewed at its exact head commit.
+- [ ] Cloudflare Preview deployed from that exact commit and verified on mobile
+      and desktop, online and disconnected.
+- [ ] Replit fallback rechecked immediately before final approval.
+- [ ] Owner approves the consolidated merge/deploy/tag/release sequence.
+- [ ] Pull request merged with an expected-head guard.
+- [ ] Exact merged `master` commit deployed to Cloudflare Production.
+- [ ] Production verified online, offline, read-only, and independent of Replit.
+- [ ] Annotated `v1.0.0` tag created at the verified Production commit.
+- [ ] GitHub Release published from the prepared notes.
+
+Unchecked items are release gates, not optional follow-up work.
+
+## Production deployment plan
+
+1. Confirm the reviewed pull-request head still equals the commit stated in the
+   final approval prompt; stop if it differs.
+2. Merge through GitHub using the repository's normal merge method and an
+   expected-head guard. Do not push directly to `master`.
+3. Confirm `origin/master` contains the reviewed commits and record the exact
+   merged commit ID.
+4. Use the existing Cloudflare Pages project `buttler`, existing Production D1
+   binding `BUTTLER_DB`, existing build command, and existing output directory.
+   Do not change billing, bindings, environment variables, DNS, or automatic
+   deployment settings.
+5. Deploy only the recorded merged commit to Production through the existing
+   token-free Git integration/manual deployment route.
+6. In a fresh tab, verify the application shell, OpenStreetMap tiles and
+   attribution, absence of any API-key warning, exactly 1,112 catalogue rows,
+   search, filters, details, directions, denied location, and rejected writes.
+7. In a separate Production PWA session that has first loaded online, disconnect
+   networking and reload. Verify the shell, bundled catalogue, search, filters,
+   details, markers, clear offline message, zero broken tiles, and no endless
+   loading state.
+8. Recheck the unchanged Replit fallback. If any check fails, stop before tag or
+   Release publication and execute the rollback plan.
+9. Only after all checks pass, create annotated tag `v1.0.0` on the recorded
+   Production commit and publish the prepared GitHub Release.
+
+## Layer-by-layer rollback details
+
+- **Git:** revert the release commits on a new branch, review the revert PR, and
+  merge normally; never reset or force-push shared history.
+- **Cloudflare Pages:** immediately select the previous known-good Production
+  deployment, then deploy the reviewed Git revert so Production and Git agree.
+- **D1:** this release has no migration or record change. Keep the existing
+  database and `BUTTLER_DB` binding unchanged; do not restore or delete data.
+- **Map:** the old keyless CARTO layer is not a valid rollback target. If OSM
+  tiles must be disabled, revert to the local grid/marker fallback while a new
+  provider is reviewed.
+- **Service worker/cache:** deploy the rollback build with the existing
+  `skipWaiting` and `clientsClaim` settings, then verify in a fresh tab and after
+  closing/reopening any installed PWA. Old browser-cached OSM tiles may expire
+  naturally under provider HTTP headers and must not be bulk-cleared remotely.
+- **GitHub tag and Release:** if failure occurs before publication, create
+  neither. If a serious defect is discovered after publication, do not silently
+  move the tag; document the issue, roll back Production, and prepare a new
+  patch release under explicit owner approval.
+- **Replit:** no rollback action is needed because this release never modifies
+  the separate Replit fallback.
