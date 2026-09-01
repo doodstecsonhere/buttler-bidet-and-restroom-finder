@@ -9,6 +9,8 @@
     "typecheck": "pnpm run typecheck:libs && pnpm -r --filter \"./artifacts/**\" --filter \"./scripts\" --if-present run typecheck",
     "test:d1": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/d1-schema.test.mjs",
     "test:d1-preview": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/d1-preview.test.mjs",
+    "test:map-offline": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/map-offline.test.mjs",
+    "test:pwa-build": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/pwa-build.test.mjs",
     "generate:d1-seed": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/generate-d1-seed.mjs --write",
     "check:d1-seed": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/generate-d1-seed.mjs --check"
   },
