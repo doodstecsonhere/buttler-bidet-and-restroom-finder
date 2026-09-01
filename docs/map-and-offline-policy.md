@@ -25,6 +25,12 @@ grid background. Street names and roads are not shown while offline unless the
 browser itself still has a provider-authorized HTTP cache entry. The interface
 states this limitation instead of showing broken or API-key-warning tiles.
 
+This guarantee depends on the PWA having completed installation while online.
+Validation may disable the network and ordinary HTTP cache, but must retain the
+service worker's Cache Storage and use an ordinary navigation reload. Clearing
+site data or explicitly bypassing the service worker simulates an uninstalled
+first visit and is outside the offline-PWA guarantee.
+
 ## Provider and attribution
 
 - Tile URL: `https://tile.openstreetmap.org/{z}/{x}/{y}.png`

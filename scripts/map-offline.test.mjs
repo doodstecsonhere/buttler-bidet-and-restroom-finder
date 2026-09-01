@@ -21,6 +21,7 @@ assert.doesNotMatch(mapSource, /cartocdn|carto\.com|api[_-]?key/i);
 assert.match(mapSource, /OpenStreetMap<\/a> contributors/);
 assert.match(mapSource, /navigator\.onLine/);
 assert.match(mapSource, /Restroom locations remain interactive/);
+assert.match(mapSource, /you may be offline/i);
 assert.match(mapSource, /prefers-reduced-motion: reduce/);
 
 assert.doesNotMatch(viteConfig, /cartocdn|map-tiles|runtimeCaching/);

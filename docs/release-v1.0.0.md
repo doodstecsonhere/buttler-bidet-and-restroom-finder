@@ -28,6 +28,19 @@ offline street tiles.
 - The existing Replit URL must still load independently and must not be changed.
 - The pull request must remain unmerged until the owner gives final approval.
 
+### Disconnected-reload method
+
+The offline check must disable the network and the browser's ordinary HTTP
+cache while leaving the installed service worker and its Cache Storage
+available. Do not use a reload option that explicitly bypasses the service
+worker or clears site data: that tests a first visit with no local application
+installed, not an installed PWA reopening offline.
+
+Before disconnecting, confirm that the service worker controls the page. Then
+reload with normal navigation semantics, confirm the shell and bundled
+catalogue render, and restore every temporary network/cache override after the
+check.
+
 ## Zero-dollar and provider limits
 
 No API key, account, card, trial, pay-as-you-go setting, secret, new dependency,

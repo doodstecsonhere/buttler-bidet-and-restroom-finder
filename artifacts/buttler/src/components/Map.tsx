@@ -286,7 +286,7 @@ export function Map({
 
   const showStreetTiles = isOnline && !tileLayerFailed;
   const mapStatus = isOnline
-    ? 'Street map unavailable. Restroom locations remain interactive.'
+    ? 'Street map unavailable or you may be offline. Restroom locations remain interactive.'
     : 'You are offline. Restroom locations remain interactive; street tiles need an internet connection.';
 
   return (
