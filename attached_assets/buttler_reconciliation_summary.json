@@ -1,0 +1,120 @@
+{
+  "generated_at": "2026-09-04T16:25:19.665092+00:00",
+  "authoritative_restroom_input": "finalized post-manual-review dumaguete_restrooms_master.csv",
+  "restroom_input_rows": 732,
+  "resolution_ledger_rows": 107,
+  "resolution_ledger_sha256": "f376b4e5235f41fee0e005678b4647c7a95d9f4ab8b7a81252f8661cb9bb52fa",
+  "bidet_input_file": "PlacesWithBidetsInDumaguete(2).xlsx",
+  "bidet_input_rows": 98,
+  "bidet_input_sha256": "18374bb82906021ca6626cb3a8b762af646723c61c8057d248b8f1e4b5ec1f71",
+  "classification_counts": {
+    "auto_matched_high_confidence": 53,
+    "unmatched_verified_bidet": 32,
+    "shared_venue_review": 11,
+    "manual_review_required": 2
+  },
+  "high_confidence_matches": 53,
+  "manual_review_required_total": 0,
+  "unmatched_verified_bidets": 32,
+  "source_conflicts": 0,
+  "canonical_rows": 776,
+  "provenance_rows": 845,
+  "unusually_distant_automatic_matches_over_60m": [
+    {
+      "Bidet_Source_ID": "bidet_survey_a093dc295b2a88fec80a",
+      "Bidet_Name": "CityMall Dumaguete",
+      "Restroom_Source_ID": "way/340651393",
+      "Restroom_Name": "CityMall Dumaguete",
+      "Distance_M": 78.4,
+      "Match_Reason": "Normalized names are exact and coordinates are 78.4 m apart."
+    }
+  ],
+  "investigated_unmatched_false_positives": [
+    {
+      "bidet_name": "DGTech Computer",
+      "restroom_source_id": "node/2938372991",
+      "restroom_name": "AMA Computer College",
+      "distance_m": 25.0,
+      "reason": "Distinct named institutions; apparent similarity is only the generic category word “Computer” despite 25.0 m proximity."
+    }
+  ],
+  "thresholds": {
+    "search_radius_m": 650,
+    "automatic_exact_name_max_m": 100,
+    "automatic_containment_max_m": 65,
+    "automatic_close_multisignal_max_m": 25,
+    "manual_plausible_max_m": 160
+  },
+  "precedence_rules": [
+    "Field-surveyed bidet presence establishes Restroom_Presence=Yes and Bidet_Presence=Yes.",
+    "Survey Access/Fee/coordinates are used for automatic matched canonical records; original OSM values remain in provenance.",
+    "Explicit source disagreements are not auto-merged and are sent to manual review.",
+    "Unmatched restroom Bidet_Presence remains Unknown unless independent OSM evidence exists.",
+    "Manual/shared cases survive as separate survey-derived canonical records until adjudicated."
+  ],
+  "validation": {
+    "original_bidet_records": 98,
+    "unique_bidet_source_ids": 98,
+    "bidet_accounted_exactly_once": true,
+    "verified_bidets_lost": 0,
+    "canonical_verified_bidets_not_yes": 0,
+    "canonical_survey_restrooms_not_yes": 0,
+    "unmatched_restroom_unknown_changed_to_no": 0,
+    "candidate_status_violations": 0,
+    "duplicate_canonical_ids": 0,
+    "provenance_orphans": 0,
+    "source_count_mismatches": 0,
+    "restroom_input_records_preserved": true,
+    "coordinates_outside_dumaguete_boundary": 0,
+    "high_similarity_close_pairs_left_unmatched": 0,
+    "automatic_many_to_one_targets": 0,
+    "manual_review_rows": 13,
+    "conflict_rows": 0,
+    "canonical_rows": 777,
+    "canonical_rows_expected": 777
+  },
+  "inputs_modified": false,
+  "limitations": [
+    "The workbook provides no survey date; Last_Checked is not invented.",
+    "Manual-review survey records may temporarily coexist with a potential restroom duplicate until adjudicated."
+  ],
+  "final_manual_adjudication_generated_at": "2026-09-04T16:25:20.589295+00:00",
+  "final_classification_counts": {
+    "auto_matched_high_confidence": 53,
+    "unmatched_verified_bidet": 32,
+    "retain_as_distinct_restroom_unit_with_parent": 11,
+    "source_data_coordinate_issue": 1,
+    "merge_with_restroom_record": 1
+  },
+  "final_adjudication_counts": {
+    "merged": 1,
+    "retained_as_distinct_child_or_restroom_unit": 11,
+    "retained_unmatched": 0,
+    "corrected_to_different_match": 0,
+    "coordinate_or_source_issues": 1,
+    "unresolved": 0
+  },
+  "final_manual_review_resolutions": 13,
+  "supplemental_citymall_distance_audit": {
+    "name": "CityMall Dumaguete",
+    "source": "way/340651393",
+    "evidence": "Reconfirmed automatic match: exact branded mall identity, matching Dumaguete/Daro context, and a large retail-building centroid explain the 78.4 m survey-to-OSM offset. Survey name and coordinates remain canonical."
+  },
+  "final_validation": {
+    "verified_bidet_match_rows": 98,
+    "verified_bidet_source_ids_unique": 98,
+    "verified_survey_provenance_rows": 98,
+    "verified_bidets_not_yes": 0,
+    "verified_restrooms_not_yes": 0,
+    "survey_name_overwrites": 0,
+    "survey_coordinate_overwrites": 0,
+    "duplicate_canonical_ids": 0,
+    "provenance_orphans": 0,
+    "source_count_mismatches": 0,
+    "unresolved_manual_review_cases": 0,
+    "canonical_rows": 776,
+    "canonical_rows_expected": 776,
+    "all_98_survived_exactly_once": true
+  },
+  "backend_import_readiness": "Technically safe: all 98 surveys are preserved exactly once, no unresolved reconciliation cases remain, and provenance is intact."
+}
