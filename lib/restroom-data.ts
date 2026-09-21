@@ -1,6 +1,8 @@
 // Provider-neutral catalogue shared by the legacy API and the static PWA.
+// `id` is the canonical D1 key (text) or the legacy bundled numeric id used
+// only as a stable fallback/list key.
 export interface Restroom {
-  id: number;
+  id: string | number;
   name: string;
   latitude: number;
   longitude: number;

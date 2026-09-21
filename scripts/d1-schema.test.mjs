@@ -40,7 +40,7 @@ const tables = database
 
 assert.deepEqual(
   tables.map(({ name }) => name),
-  ["restroom_locations"],
+  ["canonical_locations", "location_provenance", "restroom_locations"],
 );
 
 const indexes = database

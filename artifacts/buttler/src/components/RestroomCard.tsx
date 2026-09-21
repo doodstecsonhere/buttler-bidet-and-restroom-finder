@@ -3,7 +3,7 @@ import { formatDistance } from "@/lib/distance";
 import { motion } from "framer-motion";
 
 interface RestroomCardProps {
-  id: number;
+  id: string | number;
   name: string;
   latitude: number;
   longitude: number;

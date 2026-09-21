@@ -11,7 +11,8 @@ function isRestroom(value: unknown): value is Restroom {
   if (!value || typeof value !== "object") return false;
   const candidate = value as Partial<Restroom>;
   return (
-    Number.isInteger(candidate.id) &&
+    ((typeof candidate.id === "string" && candidate.id.length > 0) ||
+      Number.isInteger(candidate.id)) &&
     typeof candidate.name === "string" &&
     typeof candidate.latitude === "number" &&
     typeof candidate.longitude === "number" &&

@@ -13,7 +13,7 @@ import {
 } from "../../../../lib/restroom-loader";
 
 export interface CachedRestroom {
-  id: number;
+  id: string | number;
   name: string;
   latitude: number;
   longitude: number;

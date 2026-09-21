@@ -5,7 +5,7 @@ import L from 'leaflet';
 import type { Location } from '@/hooks/use-geolocation';
 
 export interface Restroom {
-  id: number;
+  id: string | number;
   name: string;
   latitude: number;
   longitude: number;
