@@ -4,13 +4,13 @@ import { useGeolocation } from "@/hooks/use-geolocation";
 import { calculateDistance } from "@/lib/distance";
 import { Map } from "@/components/Map";
 import { RestroomCard } from "@/components/RestroomCard";
-import { MapPinOff, Loader2, Sparkles, Search, Droplets, Users, X, WifiOff } from "lucide-react";
+import { MapPinOff, Loader2, Sparkles, Search, Droplets, Users, X, WifiOff, ServerCrash } from "lucide-react";
 import { motion } from "framer-motion";
 
 const DUMAGUETE_CENTER: [number, number] = [9.317, 123.305];
 
 export default function Home() {
-  const { data: restrooms, isLoading: restroomsLoading, error: restroomsError, isFromCache } = useOfflineRestrooms();
+  const { data: restrooms, isLoading: restroomsLoading, failure: restroomsFailure, isFromCache } = useOfflineRestrooms();
   const { location, loading: geoLoading, error: geoError } = useGeolocation();
 
   const [search, setSearch] = useState("");
@@ -44,7 +44,9 @@ export default function Home() {
       );
     }
     if (bidetsOnly) result = result.filter((r) => r.bidet);
-    if (publicOnly) result = result.filter((r) => r.access === "public" || r.access.includes("public"));
+    // Conservative public filter: only the exact stored "public" access value
+    // counts, matching the Public label on cards and markers.
+    if (publicOnly) result = result.filter((r) => r.access === "public");
     return result;
   }, [sortedRestrooms, search, bidetsOnly, publicOnly]);
 
@@ -177,10 +179,37 @@ export default function Home() {
             </div>
           )}
 
+          {/* Persistent, visually-hidden live region so screen readers are told
+              when the offline / service-problem state appears or changes. It stays
+              mounted (empty while online and healthy), which is what makes the
+              transition announce reliably; the styled banner below is decorative. */}
+          <p className="sr-only" role="status" aria-live="polite" aria-atomic="true">
+            {isFromCache
+              ? restroomsFailure === "api-error"
+                ? "The restroom service had a problem just now — showing the last saved catalogue instead."
+                : "You're offline — the saved restroom catalogue, search, and filters still work."
+              : ""}
+          </p>
+
           {isFromCache && (
-            <div className="p-3 bg-amber-50 border border-amber-200 rounded-2xl flex gap-3 text-sm text-amber-800">
-              <WifiOff className="w-4 h-4 text-amber-500 shrink-0 mt-0.5" />
-              <p>You're offline — the bundled restroom catalogue, search, and filters still work.</p>
+            <div
+              aria-hidden="true"
+              className={`p-3 rounded-2xl border flex gap-3 text-sm ${
+                restroomsFailure === "api-error"
+                  ? "bg-orange-50 border-orange-200 text-orange-800"
+                  : "bg-amber-50 border-amber-200 text-amber-800"
+              }`}
+            >
+              {restroomsFailure === "api-error" ? (
+                <ServerCrash className="w-4 h-4 text-orange-500 shrink-0 mt-0.5" />
+              ) : (
+                <WifiOff className="w-4 h-4 text-amber-500 shrink-0 mt-0.5" />
+              )}
+              <p>
+                {restroomsFailure === "api-error"
+                  ? "The restroom service had a problem just now — showing the last saved catalogue instead."
+                  : "You're offline — the saved restroom catalogue, search, and filters still work."}
+              </p>
             </div>
           )}
 
@@ -188,11 +217,6 @@ export default function Home() {
             <div className="flex flex-col items-center justify-center h-40 space-y-3 text-muted-foreground">
               <Loader2 className="w-7 h-7 animate-spin text-primary" />
               <p className="font-medium animate-pulse text-sm">Finding relief...</p>
-            </div>
-          ) : restroomsError ? (
-            <div className="p-5 text-center bg-destructive/10 rounded-2xl border border-destructive/20">
-              <p className="text-destructive font-semibold text-sm">Failed to load restroom locations.</p>
-              <p className="text-xs mt-1 text-destructive/80">Please check your connection and try again.</p>
             </div>
           ) : filteredRestrooms.length === 0 ? (
             <div className="flex flex-col items-center justify-center h-40 text-center px-6">
@@ -214,6 +238,7 @@ export default function Home() {
                 access={restroom.access}
                 fee={restroom.fee}
                 bidet={restroom.bidet}
+                bidetEvidence={restroom.bidet_evidence}
                 distance={restroom.distance}
                 index={idx}
                 audited={false}

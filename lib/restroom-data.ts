@@ -1,6 +1,18 @@
 // Provider-neutral catalogue shared by the legacy API and the static PWA.
 // `id` is the canonical D1 key (text) or the legacy bundled numeric id used
 // only as a stable fallback/list key.
+// NOTE: the RESTROOMS array below is the superseded legacy catalogue; it is
+// kept only as the seed source for the off-stack legacy `restroom_locations`
+// table. The PWA's offline catalogue is the generated canonical bundle in
+// lib/restroom-bundle.ts.
+
+/**
+ * Evidence behind a `bidet: true` claim, using the canonical dataset's own
+ * verification vocabulary: `field_verified` (owner's field survey),
+ * `osm_explicit` (asserted by the upstream map data), or `unknown`.
+ */
+export type BidetEvidence = "field_verified" | "osm_explicit" | "unknown";
+
 export interface Restroom {
   id: string | number;
   name: string;
@@ -10,6 +22,11 @@ export interface Restroom {
   access: string;
   fee: string;
   bidet: boolean;
+  /**
+   * How the bidet claim was evidenced. Always present on rows served by the
+   * canonical API; only legacy bundled rows omit it.
+   */
+  bidet_evidence?: BidetEvidence;
 }
 
 export const RESTROOMS: Restroom[] = [

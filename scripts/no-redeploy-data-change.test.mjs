@@ -3,9 +3,10 @@
 // The whole point of Buttler 2.0 is that the database is the source of truth
 // and the API is the stable contract. This test shows that a data change made
 // only in the read model becomes visible through the exact production API
-// projection WITHOUT rebuilding or redeploying the frontend. It also proves the
-// affected records are not baked into the built app bundle, so the only place
-// the new values could have come from is the database.
+// projection WITHOUT rebuilding or redeploying the frontend. The shipped
+// frontend only carries a generated snapshot of the pre-edit dataset, so any
+// value the API serves that differs from that snapshot could only have come
+// from the database.
 //
 // Everything runs against an isolated in-memory SQLite file. It never touches
 // the bound D1 database, matching how the other migration tests run.
@@ -18,16 +19,16 @@ import {
   SELECT_PUBLIC_CANONICAL_LOCATIONS,
   toPublicRestroom,
 } from "../functions/api/restrooms.ts";
+import { BUNDLED_RESTROOMS } from "../lib/restroom-bundle.ts";
 import { loadCanonicalDataset } from "./import-canonical.mjs";
 
-const ddlPath = new URL(
-  "../d1/migrations/0003_create_canonical_read_model.sql",
-  import.meta.url,
-);
-const seedPath = new URL(
-  "../d1/migrations/0004_seed_canonical_locations.sql",
-  import.meta.url,
-);
+const migrationsDir = new URL("../d1/migrations/", import.meta.url);
+const ddlPath = new URL("0003_create_canonical_read_model.sql", migrationsDir);
+// The seed arrives as an ordered set of Wrangler-safe chunk files.
+const seedPaths = readdirSync(migrationsDir)
+  .filter((name) => /^0004_seed_canonical_locations.*\.sql$/.test(name))
+  .sort()
+  .map((name) => new URL(name, migrationsDir));
 
 // The built, minified production bundle. If it is missing, run the frontend
 // production build first so this proof is meaningful.
@@ -46,14 +47,13 @@ assert.ok(bundleName, "Expected a built index-*.js bundle to inspect.");
 const bundlePath = new URL(bundleName, bundleDir);
 const bundleBefore = readFileSync(bundlePath);
 const bundleHashBefore = createHash("sha256").update(bundleBefore).digest("hex");
-const bundleText = bundleBefore.toString("utf8");
 
 // 1. Apply the schema + seed to an isolated database and read through the real
 //    production projection.
 const database = new DatabaseSync(":memory:");
 database.exec("PRAGMA foreign_keys = ON;");
 database.exec(readFileSync(ddlPath, "utf8"));
-database.exec(readFileSync(seedPath, "utf8"));
+for (const seedPath of seedPaths) database.exec(readFileSync(seedPath, "utf8"));
 
 const serve = () =>
   database
@@ -74,12 +74,14 @@ const baselineTarget = baseline.find(
 assert.ok(baselineTarget, "Target should be served before the edit.");
 assert.equal(baselineTarget.access, "unknown");
 
-// The canonical id of this record must not be baked into the shipped frontend,
-// otherwise "it came from the DB" would not be a fair claim.
-assert.ok(
-  !bundleText.includes(target.Canonical_Location_ID),
-  "Canonical record unexpectedly present in the built frontend bundle.",
+// The shipped frontend only knows about this record through the generated
+// offline snapshot. It must still hold the pre-edit value, so any changed
+// value the API serves afterwards demonstrably came from the database.
+const snapshotTarget = BUNDLED_RESTROOMS.find(
+  (r) => r.id === target.Canonical_Location_ID,
 );
+assert.ok(snapshotTarget, "Offline snapshot should include the target.");
+assert.equal(snapshotTarget.access, "unknown");
 
 // 2. Simulate an approved backend data change. This is the ONLY mutation: the
 //    frontend is never rebuilt, restarted, or redeployed between the two reads.
@@ -96,6 +98,8 @@ const editedTarget = afterEdit.find(
 assert.ok(editedTarget, "Target should still be served after the edit.");
 assert.equal(editedTarget.access, "public");
 assert.equal(editedTarget.fee, "no");
+// Same frontend bytes, new value: it could only have come from the database.
+assert.equal(snapshotTarget.access, "unknown");
 
 // 3. Simulate a brand-new record appearing without any frontend change.
 const newId = "buttler_loc_gate6_newrecord0000";

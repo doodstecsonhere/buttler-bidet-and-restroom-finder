@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 
 import { onRequest } from "../functions/api/restrooms.ts";
-import { RESTROOMS } from "../lib/restroom-data.ts";
+import { BUNDLED_RESTROOMS } from "../lib/restroom-bundle.ts";
 import { loadRestrooms } from "../lib/restroom-loader.ts";
 
 const canonicalRows = [
@@ -14,6 +14,7 @@ const canonicalRows = [
     access: "customers",
     fee: "no",
     has_bidet: 1,
+    bidet_evidence: "field_verified",
   },
   {
     id: "buttler_loc_956b9fbdf276c7542366",
@@ -24,6 +25,7 @@ const canonicalRows = [
     access: "unknown",
     fee: "unknown",
     has_bidet: 0,
+    bidet_evidence: "unknown",
   },
 ];
 
@@ -61,6 +63,11 @@ assert.equal(response.status, 200);
 assert.match(response.headers.get("cache-control"), /max-age=300/);
 assert.match(canonicalDb.queries[0], /FROM canonical_locations/);
 assert.match(canonicalDb.queries[0], /record_status <> 'rejected'/);
+assert.match(
+  canonicalDb.queries[0],
+  /bidet_verification AS bidet_evidence/,
+  "canonical projection must expose bidet_evidence",
+);
 const { has_bidet: firstBidet, ...firstPublic } = canonicalRows[0];
 const { has_bidet: secondBidet, ...secondPublic } = canonicalRows[1];
 assert.deepEqual(await response.json(), [
@@ -81,6 +88,9 @@ const legacyResponse = await onRequest({
 assert.equal(legacyResponse.status, 200);
 assert.equal(legacyDb.queries.length, 2);
 assert.match(legacyDb.queries[1], /FROM restroom_locations/);
+// The legacy table has no verification data, so its projection must report
+// evidence as 'unknown' instead of implying field checks.
+assert.match(legacyDb.queries[1], /'unknown' AS bidet_evidence/);
 assert.deepEqual(await legacyResponse.json(), [
   { ...firstPublic, bidet: firstBidet === 1 },
   { ...secondPublic, bidet: secondBidet === 1 },
@@ -115,7 +125,7 @@ for (const method of ["POST", "PUT", "PATCH", "DELETE"]) {
   assert.equal(rejected.headers.get("allow"), "GET", `${method} Allow header`);
 }
 
-// 6. The loader accepts canonical string ids from the API.
+// 6. The loader accepts canonical string ids and evidence from the API.
 const d1Result = await loadRestrooms(async () =>
   Response.json(
     canonicalRows.map(({ has_bidet, ...row }) => ({
@@ -125,19 +135,39 @@ const d1Result = await loadRestrooms(async () =>
   ),
 );
 assert.equal(d1Result.source, "d1");
+assert.equal(d1Result.failure, null);
 assert.equal(d1Result.data.length, 2);
 assert.equal(d1Result.data[0].id, "buttler_loc_b2a4f21fbc6a500ff101");
+assert.equal(d1Result.data[0].bidet_evidence, "field_verified");
 
-// 7. Invalid or unavailable payloads fall back to the bundled catalogue.
+// 6b. Rows from an older API without evidence are normalised to "unknown"
+//     rather than rejected, so the whole catalogue never disappears over one
+//     missing field.
+const legacyShapedResult = await loadRestrooms(async () =>
+  Response.json([
+    canonicalRows.map(({ has_bidet, bidet_evidence, ...row }) => ({
+      ...row,
+      bidet: has_bidet === 1,
+    }))[0],
+  ]),
+);
+assert.equal(legacyShapedResult.source, "d1");
+assert.equal(legacyShapedResult.data[0].bidet_evidence, "unknown");
+
+// 7. Invalid or unavailable payloads fall back to the canonical offline
+//    bundle, with the failure kind distinguishing server errors from being
+//    genuinely offline.
 const fallbackResult = await loadRestrooms(async () =>
   Response.json({ error: "unavailable" }, { status: 503 }),
 );
 assert.equal(fallbackResult.source, "bundled");
-assert.equal(fallbackResult.data, RESTROOMS);
+assert.equal(fallbackResult.failure, "api-error");
+assert.equal(fallbackResult.data, BUNDLED_RESTROOMS);
 
 const invalidResult = await loadRestrooms(async () =>
   Response.json([{ id: "", name: "bad" }]),
 );
 assert.equal(invalidResult.source, "bundled");
+assert.equal(invalidResult.failure, "api-error");
 
 console.log("D1_PREVIEW_TEST_SUCCESS");

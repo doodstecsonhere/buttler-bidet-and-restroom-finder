@@ -6,14 +6,27 @@
 // primary key, so future dataset updates reuse the same pipeline without ever
 // duplicating locations or provenance rows.
 //
+// Wrangler compatibility note (Stage 5C-B): before executing a migration file,
+// Wrangler splits it into statements with a heuristic that treats any statement
+// whose text ends with "CASE " or "BEGIN " as an open compound statement that
+// only closes on "END" followed by a semicolon plus whitespace. A plain SQL
+// `CASE WHEN ... END,` inside an ON CONFLICT UPDATE therefore never closes, and
+// Wrangler sends the rest of the file as ONE statement, which local D1 rejects
+// with `SQLITE_TOOBIG` once it passes 100,000 bytes. Every statement this
+// generator emits must avoid the bare words BEGIN/CASE/END for that reason; the
+// reviewed-record guard below uses COALESCE/NULLIF instead of CASE, and
+// assertMigrationsAreWranglerSafe() enforces the rule together with a per-file
+// size budget that also protects against a merged file exceeding the limit.
+//
 // Usage:
 //   node scripts/import-canonical.mjs --validate   validate inputs + report
-//   node scripts/import-canonical.mjs --write      regenerate migrations 0003/0004
+//   node scripts/import-canonical.mjs --write      regenerate migrations 0003/0004...
 //   node scripts/import-canonical.mjs --check      fail if committed migrations are stale
 
 import { createHash } from "node:crypto";
-import { readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
+import { resolve } from "node:path";
 
 import { parseCsvRecords } from "./src/csv.mjs";
 
@@ -21,7 +34,18 @@ const CANONICAL_CSV = new URL("../attached_assets/buttler_locations_canonical.cs
 const PROVENANCE_CSV = new URL("../attached_assets/buttler_location_provenance.csv", import.meta.url);
 const MIGRATIONS_DIR = new URL("../d1/migrations/", import.meta.url);
 const DDL_FILE = "0003_create_canonical_read_model.sql";
-const SEED_FILE = "0004_seed_canonical_locations.sql";
+const SEED_BASE = "0004_seed_canonical_locations";
+
+// Rows per seed statement. Kept small so a single statement stays well under
+// both the per-file byte budget and the 100,000 byte per-statement ceiling of
+// local D1, even for the widest records.
+const SEED_BATCH_ROWS = 25;
+// Migration files are chunked so that even if Wrangler's splitter merged a
+// whole file into one statement, the file still fits under the local D1
+// per-statement ceiling (observed empirically at 100,000 bytes between
+// 92,416 bytes passing and 110,851 bytes failing).
+const MIGRATION_FILE_BUDGET_BYTES = 65_536;
+const WRANGLER_STATEMENT_LIMIT_BYTES = 100_000;
 
 export const REQUIRED_CANONICAL_COLUMNS = [
   "Canonical_Location_ID",
@@ -578,12 +602,16 @@ export function generateCanonicalSeedSql(canonical, provenance, fingerprints) {
     `-- provenance_rows=${fingerprints.provenance_rows}`,
     "-- Re-importing upserts by primary key: no duplicate locations, and",
     "-- reviewed backend edits are only overwritten by the next approved dataset.",
+    "-- reviewed record_status is preserved via COALESCE/NULLIF rather than CASE",
+    "-- WHEN, because Wrangler's SQL splitter treats a trailing `CASE ` as an",
+    "-- unclosed compound statement and merges the rest of the file into one",
+    "-- statement that local D1 then rejects with SQLITE_TOOBIG.",
     "",
   ].join("\n");
 
   const statements = [];
-  for (let index = 0; index < byId.length; index += 50) {
-    const batch = byId.slice(index, index + 50);
+  for (let index = 0; index < byId.length; index += SEED_BATCH_ROWS) {
+    const batch = byId.slice(index, index + SEED_BATCH_ROWS);
     statements.push(
       [
         `INSERT INTO canonical_locations (\n  ${[CANONICAL_COLUMNS[0], "record_status", ...CANONICAL_COLUMNS.slice(1)].join(", ")}\n) VALUES`,
@@ -592,12 +620,12 @@ export function generateCanonicalSeedSql(canonical, provenance, fingerprints) {
           CANONICAL_COLUMNS.slice(1)
             .map((column) => `${column} = excluded.${column}`)
             .join(",\n  ") +
-          ",\n  record_status = CASE WHEN canonical_locations.record_status = 'candidate' THEN excluded.record_status ELSE canonical_locations.record_status END,\n  updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now');",
+          ",\n  record_status = COALESCE(NULLIF(CAST(canonical_locations.record_status AS TEXT), 'candidate'), excluded.record_status),\n  updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now');",
       ].join("\n"),
     );
   }
-  for (let index = 0; index < provSorted.length; index += 50) {
-    const batch = provSorted.slice(index, index + 50);
+  for (let index = 0; index < provSorted.length; index += SEED_BATCH_ROWS) {
+    const batch = provSorted.slice(index, index + SEED_BATCH_ROWS);
     statements.push(
       [
         `INSERT INTO location_provenance (\n  ${PROVENANCE_COLUMNS.join(", ")}\n) VALUES`,
@@ -610,7 +638,193 @@ export function generateCanonicalSeedSql(canonical, provenance, fingerprints) {
     );
   }
 
-  return `${header}\n${statements.join("\n\n")}\n`;
+  // Chunk the statements into ordered files by packing each file up to the byte
+  // budget. Packing by accumulated bytes (not a fixed statement count) matters
+  // because statements have unequal sizes: rounding a statement count could put
+  // two ~64 KB statements into one file and exceed the per-statement ceiling if
+  // Wrangler ever merged them. Locations always precede their provenance links,
+  // so any prefix of the sequence stays applyable in order against the FKs. A
+  // single statement larger than the budget still gets its own file (assert
+  // catches it if that alone breaks the ceiling).
+  const chunks = [];
+  let current = [];
+  for (const statement of statements) {
+    const candidate = [...current, statement];
+    const candidateSql = `${header}\n${candidate.join("\n\n")}\n`;
+    if (
+      current.length > 0 &&
+      Buffer.byteLength(candidateSql) > MIGRATION_FILE_BUDGET_BYTES
+    ) {
+      chunks.push(current);
+      current = [statement];
+    } else {
+      current = candidate;
+    }
+  }
+  if (current.length > 0) chunks.push(current);
+
+  const files = chunks.map((chunk, index) => {
+    const suffix = chunks.length === 1 ? "" : `_${String(index + 1).padStart(2, "0")}`;
+    return {
+      file: `${SEED_BASE}${suffix}.sql`,
+      sql: `${header}\n${chunk.join("\n\n")}\n`,
+    };
+  });
+  return files;
+}
+
+// ---- Faithful port of Wrangler's D1 SQL splitter (src/d1/splitter.ts +
+// trimmer.ts) so migration-safety assertions match exactly what
+// `wrangler d1 migrations apply` does. It strips `--` line comments and
+// consumes quoted strings atomically, so only bare BEGIN/CASE/END tokens in
+// real SQL open a compound statement. A test compares this against Wrangler's
+// own exported unstable_splitSqlQuery to keep the two in sync.
+function wranglerMayContainTransaction(sql) {
+  return sql.includes("BEGIN TRANSACTION");
+}
+function wranglerTrimSqlQuery(sql) {
+  if (!wranglerMayContainTransaction(sql)) return sql;
+  return sql.replace("BEGIN TRANSACTION;", "").replace("COMMIT;", "");
+}
+function wranglerMayContainMultipleStatements(sql) {
+  const trimmed = sql.trimEnd();
+  const semiColonIndex = trimmed.indexOf(";");
+  return semiColonIndex !== -1 && semiColonIndex !== trimmed.length - 1;
+}
+function wranglerIsCompoundStatementStart(str) {
+  return /\s(BEGIN|CASE)\s$/i.test(str);
+}
+function wranglerIsCompoundStatementEnd(str) {
+  return /\sEND[;\s]$/i.test(str);
+}
+function wranglerIsDollarQuoteIdentifier(str) {
+  const lastChar = str.slice(-1);
+  return (
+    lastChar !== "$" &&
+    (/[0-9_]/i.test(lastChar) || lastChar.toLowerCase() !== lastChar.toUpperCase())
+  );
+}
+function wranglerConsumeWhile(iterator, predicate, window = 16) {
+  let next = iterator.next();
+  let str = "";
+  let tail = "";
+  while (!next.done) {
+    str += next.value;
+    tail = (tail + next.value).slice(-window);
+    if (!predicate(tail)) break;
+    next = iterator.next();
+  }
+  return str;
+}
+function wranglerConsumeUntilMarker(iterator, endMarker) {
+  return wranglerConsumeWhile(iterator, (str) => !str.endsWith(endMarker), endMarker.length);
+}
+function wranglerSplitIntoStatements(sql) {
+  const statements = [];
+  let str = "";
+  const compoundStatementStack = [];
+  const iterator = sql[Symbol.iterator]();
+  let next = iterator.next();
+  while (!next.done) {
+    const char = next.value;
+    if (compoundStatementStack[0]?.(str + char)) {
+      compoundStatementStack.shift();
+    }
+    switch (char) {
+      case "'":
+      case '"':
+      case "`":
+        str += char + wranglerConsumeUntilMarker(iterator, char);
+        break;
+      case "$": {
+        const dollarQuote = "$" + wranglerConsumeWhile(iterator, wranglerIsDollarQuoteIdentifier);
+        str += dollarQuote;
+        if (dollarQuote.endsWith("$")) {
+          str += wranglerConsumeUntilMarker(iterator, dollarQuote);
+        }
+        break;
+      }
+      case "-":
+        next = iterator.next();
+        if (!next.done && next.value === "-") {
+          wranglerConsumeUntilMarker(iterator, "\n");
+          str += "\n";
+          break;
+        } else {
+          str += char;
+          continue;
+        }
+      case "/":
+        next = iterator.next();
+        if (!next.done && next.value === "*") {
+          wranglerConsumeUntilMarker(iterator, "*/");
+          break;
+        } else {
+          str += char;
+          continue;
+        }
+      case ";":
+        if (compoundStatementStack.length === 0) {
+          statements.push(str);
+          str = "";
+        } else {
+          str += char;
+        }
+        break;
+      default:
+        str += char;
+        break;
+    }
+    if (wranglerIsCompoundStatementStart(str)) {
+      compoundStatementStack.unshift(wranglerIsCompoundStatementEnd);
+    }
+    next = iterator.next();
+  }
+  statements.push(str);
+  return statements
+    .map((statement) => statement.trim())
+    .filter((statement) => statement.length > 0);
+}
+export function wranglerSplitSql(sql) {
+  const trimmedSql = wranglerTrimSqlQuery(sql);
+  if (!wranglerMayContainMultipleStatements(trimmedSql)) {
+    return [trimmedSql];
+  }
+  const split = wranglerSplitIntoStatements(trimmedSql);
+  return split.length === 0 ? [trimmedSql] : split;
+}
+
+// Fails at generation time if Wrangler's real splitter would produce any single
+// statement larger than local D1's per-statement ceiling. That is precisely the
+// condition behind SQLITE_TOOBIG: a bare BEGIN/CASE/END token merges the rest of
+// a file into one statement. Checking the split output (not a text scan) avoids
+// false alarms on the words CASE/END inside comments or string values.
+export function assertMigrationsAreWranglerSafe(files) {
+  const errors = [];
+  for (const { file, sql } of files) {
+    const statements = wranglerSplitSql(sql);
+    if (statements.length === 0) {
+      errors.push(`${file}: produced no statements`);
+      continue;
+    }
+    for (const [index, statement] of statements.entries()) {
+      const bytes = Buffer.byteLength(statement);
+      if (bytes > WRANGLER_STATEMENT_LIMIT_BYTES) {
+        errors.push(
+          `${file}: statement ${index + 1} is ${bytes} bytes (> ${WRANGLER_STATEMENT_LIMIT_BYTES}) and would hit SQLITE_TOOBIG; Wrangler merged ${statements.length} statement(s) into it — look for a bare BEGIN/CASE/END token outside a string or comment`,
+        );
+      }
+    }
+  }
+  if (errors.length) {
+    throw new Error(`Wrangler migration safety check failed:\n${[...new Set(errors)].join("\n")}`);
+  }
+}
+
+// The exact set of seed migration files the generator would write, so tests
+// and cleanup never have to hard-code the chunk count.
+export function listCanonicalMigrationFiles(files) {
+  return [DDL_FILE, ...files.map(({ file }) => file)];
 }
 
 function migrationSqlExists(dir, filename) {
@@ -618,43 +832,86 @@ function migrationSqlExists(dir, filename) {
 }
 
 const mode = process.argv[2];
+// Only act as a CLI when this file is the entry point. Importers such as
+// scripts/generate-bundled-catalogue.mjs and the tests share flags like
+// --write, and must never trigger a migration rewrite as a side effect.
+const isEntry =
+  process.argv[1] &&
+  resolve(process.argv[1]) === fileURLToPath(import.meta.url);
 
-if (mode === "--validate" || mode === "--write" || mode === "--check") {
+function isSeedMigrationFile(name) {
+  return name.startsWith(`${SEED_BASE}`) && name.endsWith(".sql");
+}
+
+if (isEntry && (mode === "--validate" || mode === "--write" || mode === "--check")) {
   const dataset = loadCanonicalDataset();
   const stats = validateDataset(dataset);
-  const seedSql = generateCanonicalSeedSql(
+  const seedFiles = generateCanonicalSeedSql(
     dataset.canonical,
     dataset.provenance,
     dataset.fingerprints,
   );
   const ddlSql = generateCanonicalDdlSql();
+  const migrationsDirPath = fileURLToPath(MIGRATIONS_DIR);
+  const seedFileList = seedFiles.map(({ file }) => file).join(",");
 
   if (mode === "--validate") {
+    // Validate that the generated migrations would apply cleanly under
+    // Wrangler's local D1 splitter before reporting the dataset stats.
+    assertMigrationsAreWranglerSafe(seedFiles);
     console.log(
-      JSON.stringify({ ok: true, ...dataset.fingerprints, ...stats }, null, 2),
+      JSON.stringify(
+        { ok: true, ...dataset.fingerprints, ...stats, seed_files: seedFiles.map(({ file }) => file) },
+        null,
+        2,
+      ),
     );
   } else if (mode === "--write") {
+    assertMigrationsAreWranglerSafe(seedFiles);
     writeFileSync(new URL(DDL_FILE, MIGRATIONS_DIR), ddlSql, "utf8");
-    writeFileSync(new URL(SEED_FILE, MIGRATIONS_DIR), seedSql, "utf8");
+    const expected = new Set(seedFiles.map(({ file }) => file));
+    for (const { file, sql } of seedFiles) {
+      writeFileSync(new URL(file, MIGRATIONS_DIR), sql, "utf8");
+    }
+    // Remove seed chunks left over from a previous (different) chunking so the
+    // migration directory never holds stale or duplicated data.
+    for (const name of readdirSync(migrationsDirPath)) {
+      if (isSeedMigrationFile(name) && !expected.has(name)) {
+        rmSync(new URL(name, MIGRATIONS_DIR));
+      }
+    }
     console.log(
-      `CANONICAL_MIGRATIONS_WRITTEN canonical_rows=${dataset.canonical.length} provenance_rows=${dataset.provenance.length}`,
+      `CANONICAL_MIGRATIONS_WRITTEN canonical_rows=${dataset.canonical.length} provenance_rows=${dataset.provenance.length} seed_files=${seedFileList}`,
     );
   } else {
-    const currentDdl = migrationSqlExists(fileURLToPath(MIGRATIONS_DIR), DDL_FILE)
+    assertMigrationsAreWranglerSafe(seedFiles);
+    const problems = [];
+    const currentDdl = migrationSqlExists(migrationsDirPath, DDL_FILE)
       ? readFileSync(new URL(DDL_FILE, MIGRATIONS_DIR), "utf8").replaceAll("\r\n", "\n")
       : "";
-    const currentSeed = migrationSqlExists(fileURLToPath(MIGRATIONS_DIR), SEED_FILE)
-      ? readFileSync(new URL(SEED_FILE, MIGRATIONS_DIR), "utf8").replaceAll("\r\n", "\n")
-      : "";
-    if (currentDdl !== ddlSql || currentSeed !== seedSql) {
+    if (currentDdl !== ddlSql) problems.push(`${DDL_FILE}: content differs from generated DDL`);
+    const expected = new Set(seedFiles.map(({ file }) => file));
+    for (const { file, sql } of seedFiles) {
+      const current = migrationSqlExists(migrationsDirPath, file)
+        ? readFileSync(new URL(file, MIGRATIONS_DIR), "utf8").replaceAll("\r\n", "\n")
+        : null;
+      if (current === null) problems.push(`${file}: missing`);
+      else if (current !== sql) problems.push(`${file}: content differs from generated seed`);
+    }
+    for (const name of readdirSync(migrationsDirPath)) {
+      if (isSeedMigrationFile(name) && !expected.has(name)) {
+        problems.push(`${name}: unexpected stale seed migration`);
+      }
+    }
+    if (problems.length) {
       throw new Error(
-        "Canonical D1 migrations are stale; run: node scripts/import-canonical.mjs --write",
+        `Canonical D1 migrations are stale; run: node scripts/import-canonical.mjs --write\n${problems.join("\n")}`,
       );
     }
     console.log(
-      `CANONICAL_MIGRATIONS_CURRENT canonical_rows=${dataset.canonical.length} provenance_rows=${dataset.provenance.length}`,
+      `CANONICAL_MIGRATIONS_CURRENT canonical_rows=${dataset.canonical.length} provenance_rows=${dataset.provenance.length} seed_files=${seedFileList}`,
     );
   }
-} else if (fileURLToPath(import.meta.url) === process.argv[1]) {
+} else if (isEntry) {
   throw new Error("Use --validate, --write, or --check");
 }

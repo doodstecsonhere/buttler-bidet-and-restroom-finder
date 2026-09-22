@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import { MapContainer, TileLayer, Marker, Popup, useMap } from 'react-leaflet';
 import L from 'leaflet';
 import type { Location } from '@/hooks/use-geolocation';
+import type { BidetEvidence } from "../../../../lib/restroom-data";
 
 export interface Restroom {
   id: string | number;
@@ -13,6 +14,7 @@ export interface Restroom {
   access: string;
   fee: string;
   bidet: boolean;
+  bidet_evidence?: BidetEvidence;
   distance?: number;
 }
 
@@ -84,8 +86,8 @@ if (typeof document !== 'undefined' && !document.getElementById('buttler-pulse-s
 //     time either resolves it fires the viewport ONCE and locks the hasFit ref.
 //   • FAB tap: always re-runs geolocation and flies to the new position.
 //
-// Nothing here touches the 1168 restroom markers — they live in a sibling
-// subtree so only the green dot Marker re-renders on position change.
+// Nothing here touches the 776 canonical restroom markers — they live in a
+// sibling subtree so only the green dot Marker re-renders on position change.
 
 const LOCATE_MSG = 'Location access needed to show user location.';
 const STARTUP_ZOOM = 17;
@@ -257,9 +259,11 @@ function LocateButton({ autoLocation, autoError, fallbackCenter }: LocateButtonP
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 function accessLabel(access: string) {
+  // Conservative classification shared with RestroomCard: exact "public"
+  // only; "unknown" is labelled honestly instead of raw database vocabulary.
   if (access === 'public') return { label: 'Public', color: '#22c55e' };
-  if (access === 'customers') return { label: 'Customer-Only', color: '#f59e0b' };
-  return { label: access, color: '#94a3b8' };
+  if (access === 'unknown') return { label: 'Access unconfirmed', color: '#94a3b8' };
+  return { label: 'Customer-Only', color: '#f59e0b' };
 }
 
 function feeLabel(fee: string) {
@@ -292,7 +296,7 @@ export function Map({
   return (
     // Initial center = downtown Dumaguete at zoom 15.
     // LocateButton will immediately fly to the user if geolocation resolves,
-    // or stay here if it fails — no fitBounds over all 1168 pins ever fires.
+    // or stay here if it fails — no fitBounds over all 776 pins ever fires.
     <section
       className="relative w-full h-full overflow-hidden bg-slate-100"
       role="region"
@@ -329,6 +333,7 @@ export function Map({
       {restrooms.map((restroom) => {
         const icon = restroom.bidet ? bidetIcon : noDropIcon;
         const access = accessLabel(restroom.access);
+        const bidetFromMapDataOnly = restroom.bidet && restroom.bidet_evidence === 'osm_explicit';
 
         return (
           <Marker
@@ -358,7 +363,8 @@ export function Map({
                   </span>
                   {restroom.bidet && (
                     <span style={{ fontSize: 11, fontWeight: 600, padding: '2px 7px', borderRadius: 99, background: '#fef3c7', color: '#b45309' }}>
-                      Bidet ✓
+                      {/* No checkmark: availability is claimed, not field-guaranteed. */}
+                      Bidet{bidetFromMapDataOnly ? ' \u00B7 map data' : ''}
                     </span>
                   )}
                 </div>

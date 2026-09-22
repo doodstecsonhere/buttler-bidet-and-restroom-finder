@@ -3,7 +3,8 @@ import { formatDistance } from "@/lib/distance";
 import { motion } from "framer-motion";
 
 interface BidetCardProps {
-  id: number;
+  // Canonical catalogue ids are strings; legacy bundled ids were numeric.
+  id: string | number;
   name: string;
   latitude: number;
   longitude: number;

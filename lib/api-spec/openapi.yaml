@@ -2,7 +2,14 @@ openapi: 3.1.0
 info:
   title: Api
   version: 0.1.0
-  description: API specification
+  description: >-
+    API specification. Status (BUTTLER 2.0): only GET /restrooms is deployed —
+    it is served by the Cloudflare Pages function in functions/api/restrooms.ts
+    from the canonical D1 read model. The health, audits, and auth paths
+    document the historical Replit-era Express server (artifacts/api-server)
+    that is off the production request path; keep them for reference only.
+    The generated orval clients in lib/api-client-react and lib/api-zod are
+    consumed solely by that legacy server stack, not by the PWA.
 servers:
   - url: /api
     description: Base API path
@@ -34,7 +41,10 @@ paths:
       operationId: getRestrooms
       tags: [restrooms]
       summary: Get all restroom locations
-      description: Returns all restroom locations in Dumaguete
+      description: >-
+        Returns the canonical public catalogue (776 owner-approved locations,
+        including unverified discovery candidates). Read-only: non-GET methods
+        return 405.
       responses:
         "200":
           description: List of restroom locations
@@ -223,7 +233,9 @@ components:
       type: object
       properties:
         id:
-          type: integer
+          type: string
+          description: Canonical string key (e.g. buttler_loc_...)
+          pattern: '^buttler_loc_[0-9a-f]{20}$'
         name:
           type: string
         latitude:
@@ -236,10 +248,21 @@ components:
           type: [string, 'null']
         access:
           type: string
+          description: >-
+            Stored access value; only the exact "public" may be presented as
+            public. Unknown stays unknown and is never rewritten.
         fee:
           type: string
+          description: Canonical fee value ('yes', 'no', or 'unknown'); never
+            flattened into a lossy boolean.
         bidet:
           type: boolean
+        bidet_evidence:
+          type: string
+          enum: [field_verified, osm_explicit, unknown]
+          description: >-
+            Evidence behind a bidet=true claim, derived from the canonical
+            verification column.
       required:
         - id
         - name
@@ -249,6 +272,7 @@ components:
         - access
         - fee
         - bidet
+        - bidet_evidence
     CreateAuditBody:
       type: object
       required: [restroomId, restroomName, latitude, longitude, pwdAccessible, hasSoap, hasToiletSeat, hasTissue, hasFunctionalBidet]

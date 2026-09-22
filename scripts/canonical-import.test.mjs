@@ -1,42 +1,70 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { DatabaseSync } from "node:sqlite";
 
 import {
   EXPECTED_VERIFIED_BIDET_COUNT,
   PROTECTED_DISTINCT_ENTITIES,
+  assertMigrationsAreWranglerSafe,
   generateCanonicalDdlSql,
   generateCanonicalSeedSql,
+  listCanonicalMigrationFiles,
   loadCanonicalDataset,
   validateDataset,
 } from "./import-canonical.mjs";
 
-const ddlPath = new URL(
-  "../d1/migrations/0003_create_canonical_read_model.sql",
-  import.meta.url,
-);
-const seedPath = new URL(
-  "../d1/migrations/0004_seed_canonical_locations.sql",
-  import.meta.url,
-);
+const migrationsDir = new URL("../d1/migrations/", import.meta.url);
+const migrationsDirPath = fileURLToPath(migrationsDir);
+const ddlPath = new URL("0003_create_canonical_read_model.sql", migrationsDir);
 const normalize = (value) => value.replaceAll("\r\n", "\n");
 
-// 1. The checked-in migrations match the generator and the source CSVs.
+// 1. The checked-in migrations match the generator and the source CSVs. The
+//    seed is generated as an ordered set of Wrangler-safe chunk files.
 const dataset = loadCanonicalDataset();
 const stats = validateDataset(dataset);
-assert.equal(normalize(readFileSync(seedPath, "utf8")), normalize(generateCanonicalSeedSql(dataset.canonical, dataset.provenance, dataset.fingerprints)));
+const generatedSeed = generateCanonicalSeedSql(
+  dataset.canonical,
+  dataset.provenance,
+  dataset.fingerprints,
+);
+const seedFileNames = generatedSeed.map(({ file }) => file);
+
+const onDiskSeed = readdirSync(migrationsDirPath)
+  .filter((name) => /^0004_seed_canonical_locations.*\.sql$/.test(name))
+  .sort();
+assert.deepEqual(onDiskSeed, [...seedFileNames].sort());
+for (const { file, sql } of generatedSeed) {
+  assert.equal(
+    normalize(readFileSync(new URL(file, migrationsDir), "utf8")),
+    normalize(sql),
+    `${file} is stale`,
+  );
+}
 assert.equal(normalize(readFileSync(ddlPath, "utf8")), normalize(generateCanonicalDdlSql()));
+// The generator's own Wrangler-splitter guard must pass on the checked-in files.
+assertMigrationsAreWranglerSafe(
+  seedFileNames.map((file) => ({ file, sql: readFileSync(new URL(file, migrationsDir), "utf8") })),
+);
+assert.deepEqual(listCanonicalMigrationFiles(generatedSeed), [
+  "0003_create_canonical_read_model.sql",
+  ...seedFileNames,
+]);
 
 // 2. Dataset invariants from the reconciliation summary.
 assert.equal(stats.canonical_rows, 776);
 assert.equal(stats.provenance_rows, 845);
 assert.equal(stats.verified_bidet_records, EXPECTED_VERIFIED_BIDET_COUNT);
 
-// 3. Apply the schema and seed to an isolated in-memory database.
+// 3. Apply the schema and every seed chunk to an isolated in-memory database,
+//    in migration order (locations before provenance).
+const seedSqlChunks = seedFileNames.map((name) =>
+  readFileSync(new URL(name, migrationsDir), "utf8"),
+);
 const database = new DatabaseSync(":memory:");
 database.exec("PRAGMA foreign_keys = ON;");
 database.exec(readFileSync(ddlPath, "utf8"));
-database.exec(readFileSync(seedPath, "utf8"));
+for (const sql of seedSqlChunks) database.exec(sql);
 
 const countIn = (table) =>
   database.prepare(`SELECT count(*) AS n FROM ${table}`).get().n;
@@ -142,7 +170,7 @@ assert.equal(
 
 // 8. Import is idempotent: rerunning preserves counts, and a reviewed
 //    record_status upgrade survives a re-import while field data refreshes.
-database.exec(readFileSync(seedPath, "utf8"));
+for (const sql of seedSqlChunks) database.exec(sql);
 assert.equal(countIn("canonical_locations"), 776);
 assert.equal(countIn("location_provenance"), 845);
 
@@ -150,7 +178,7 @@ const target = dataset.canonical.find((row) => !row.Bidet_Source_ID);
 database
   .prepare("UPDATE canonical_locations SET record_status = 'verified', notes = 'reviewed' WHERE canonical_id = ?")
   .run(target.Canonical_Location_ID);
-database.exec(readFileSync(seedPath, "utf8"));
+for (const sql of seedSqlChunks) database.exec(sql);
 const preserved = database
   .prepare("SELECT record_status FROM canonical_locations WHERE canonical_id = ?")
   .get(target.Canonical_Location_ID);

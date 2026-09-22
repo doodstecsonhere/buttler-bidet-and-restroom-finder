@@ -18,12 +18,23 @@ does not legally or reliably have.
 
 ## Offline experience
 
-Once the PWA has been loaded, the application shell and the bundled catalogue
-of 1,112 restroom locations remain available without a network connection.
-Search, filters, markers, popups, and map pan/zoom remain interactive on a local
-grid background. Street names and roads are not shown while offline unless the
-browser itself still has a provider-authorized HTTP cache entry. The interface
-states this limitation instead of showing broken or API-key-warning tiles.
+Once the PWA has been loaded, the application shell and the restroom catalogue
+remain available without a network connection. Since BUTTLER 2.0 Stage 5B the
+offline catalogue is canonical, never a second dataset: the loader prefers the
+live API, then the last-known-good canonical API response saved on the device,
+then a generated snapshot of the 776-location canonical dataset
+(`lib/restroom-bundle.ts`, produced by
+`scripts/generate-bundled-catalogue.mjs`). The superseded legacy 1,112-row
+bundle is no longer served to users. Search, filters, markers, popups, and map
+pan/zoom remain interactive on a local grid background. Street names and roads
+are not shown while offline unless the browser itself still has a
+provider-authorized HTTP cache entry. The interface states this limitation
+instead of showing broken or API-key-warning tiles.
+
+The app also distinguishes a true network failure from a server-side API
+error: an HTTP failure from `/api/restrooms` while online shows a service-
+problem notice over the last saved catalogue and never claims "You're
+offline".
 
 This guarantee depends on the PWA having completed installation while online.
 Validation may disable the network and ordinary HTTP cache, but must retain the

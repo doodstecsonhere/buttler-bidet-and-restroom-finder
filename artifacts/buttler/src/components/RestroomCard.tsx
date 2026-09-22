@@ -1,6 +1,7 @@
-import { Navigation, MapPin, Droplets, Users, Lock } from "lucide-react";
+import { Navigation, MapPin, Droplets, Users, Lock, CircleQuestionMark } from "lucide-react";
 import { formatDistance } from "@/lib/distance";
 import { motion } from "framer-motion";
+import type { BidetEvidence } from "../../../../lib/restroom-data";
 
 interface RestroomCardProps {
   id: string | number;
@@ -11,17 +12,23 @@ interface RestroomCardProps {
   access: string;
   fee: string;
   bidet: boolean;
+  bidetEvidence?: BidetEvidence;
   distance?: number;
   index: number;
   audited: boolean;
 }
 
-export function RestroomCard({ name, latitude, longitude, address, access, fee, bidet, distance, index, audited }: RestroomCardProps) {
+export function RestroomCard({ name, latitude, longitude, address, access, fee, bidet, bidetEvidence, distance, index, audited }: RestroomCardProps) {
   const openDirections = () => {
     window.open(`https://www.google.com/maps/dir/?api=1&destination=${latitude},${longitude}`, '_blank', 'noopener,noreferrer');
   };
 
+  // Conservative public classification: only the exact stored value "public"
+  // is presented as Public. "unknown" stays honest as "Access unconfirmed"
+  // instead of claiming a customer-only rule that was never checked; every
+  // other non-public value is treated as Customer-Only.
   const isPublic = access === 'public';
+  const isAccessUnconfirmed = access === 'unknown';
   const isFree = fee === 'no';
 
   return (
@@ -53,9 +60,24 @@ export function RestroomCard({ name, latitude, longitude, address, access, fee, 
             </div>
           </div>
           <div className="flex items-center gap-1.5 mt-1.5 flex-wrap">
-            <span className={`flex items-center gap-1 text-xs font-semibold px-2 py-0.5 rounded-full ${isPublic ? 'bg-green-100 text-green-700' : 'bg-orange-100 text-orange-700'}`}>
-              {isPublic ? <Users className="w-3 h-3" /> : <Lock className="w-3 h-3" />}
-              {isPublic ? 'Public' : 'Customer-Only'}
+            <span
+              className={`flex items-center gap-1 text-xs font-semibold px-2 py-0.5 rounded-full ${
+                isPublic
+                  ? 'bg-green-100 text-green-700'
+                  : isAccessUnconfirmed
+                    ? 'bg-slate-100 text-slate-600'
+                    : 'bg-orange-100 text-orange-700'
+              }`}
+              title={isAccessUnconfirmed ? 'Access has not been confirmed as public' : undefined}
+            >
+              {isPublic ? (
+                <Users className="w-3 h-3" />
+              ) : isAccessUnconfirmed ? (
+                <CircleQuestionMark className="w-3 h-3" />
+              ) : (
+                <Lock className="w-3 h-3" />
+              )}
+              {isPublic ? 'Public' : isAccessUnconfirmed ? 'Access unconfirmed' : 'Customer-Only'}
             </span>
             {!isFree && (
               <span className="text-xs font-semibold px-2 py-0.5 rounded-full bg-muted text-muted-foreground">
@@ -63,8 +85,17 @@ export function RestroomCard({ name, latitude, longitude, address, access, fee, 
               </span>
             )}
             {bidet && (
-              <span className="flex items-center gap-1 text-xs font-semibold px-2 py-0.5 rounded-full bg-sky-100 text-sky-700">
+              <span
+                className="flex items-center gap-1 text-xs font-semibold px-2 py-0.5 rounded-full bg-sky-100 text-sky-700"
+                title={bidetEvidence === 'osm_explicit' ? 'Bidet reported by map data — not field-checked yet' : undefined}
+              >
                 <Droplets className="w-3 h-3" /> Bidet
+                {/* Kept visually secondary via font-normal, but full sky-700 on
+                    sky-100 so the · map data hint meets WCAG AA text contrast
+                    (the previous /70 opacity was only ~3:1). */}
+                {bidetEvidence === 'osm_explicit' && (
+                  <span className="font-normal text-sky-700">· map data</span>
+                )}
               </span>
             )}
           </div>
