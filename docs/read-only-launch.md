@@ -6,7 +6,7 @@ candidate only; this branch does not create or change hosting.
 
 ## Included journeys
 
-- Browse all bundled restroom locations.
+- Browse all restroom locations.
 - Search by place name or address.
 - Filter for bidets or public access.
 - View map markers and listing details.
@@ -27,11 +27,15 @@ current conditions instead of implying that unaudited information is verified.
 
 ## Data flow
 
-`lib/restroom-data.ts` is the provider-neutral source catalogue. The PWA bundles
-it at build time, so loading places does not contact Replit, Neon, PostgreSQL,
-or an application API. The legacy Express route imports the same catalogue to
-avoid creating two divergent copies while Replit remains available for
-rollback.
+Since the Stage 9 canonical cutover the frontend asks the same-origin,
+GET-only `functions/api/restrooms.ts` Pages Function, which projects the
+canonical D1 read model (776 string-keyed locations). On any API or network
+failure, `lib/restroom-loader.ts` falls back to the last-known-good canonical
+response cached per device, and before any successful load to the generated
+canonical bundle in `lib/restroom-bundle.ts` — never the superseded legacy
+catalogue. The `RESTROOMS` array in `lib/restroom-data.ts` remains only as the
+seed source for the off-stack legacy `restroom_locations` table and is
+tree-shaken out of the shipped PWA bundle.
 
 ## Local checks
 
