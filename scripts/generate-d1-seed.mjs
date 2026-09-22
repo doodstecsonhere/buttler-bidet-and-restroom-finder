@@ -73,7 +73,10 @@ if (mode === "--write") {
   writeFileSync(outputUrl, generated, "utf8");
   console.log(`D1_SEED_WRITTEN rows=${RESTROOMS.length}`);
 } else if (mode === "--check") {
-  const checkedIn = readFileSync(outputUrl, "utf8");
+  // Normalize CRLF before comparing: Git may check the file out with CRLF on
+  // Windows while the generator always emits LF, so a raw byte compare would
+  // report a false "stale" result (same convention as the other generators).
+  const checkedIn = readFileSync(outputUrl, "utf8").replaceAll("\r\n", "\n");
   if (checkedIn !== generated) {
     throw new Error("D1 seed is stale; run pnpm generate:d1-seed");
   }

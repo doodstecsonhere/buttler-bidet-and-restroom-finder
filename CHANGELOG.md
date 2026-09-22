@@ -2,7 +2,7 @@
 
 All notable changes to Buttler are documented here.
 
-## [Unreleased] - BUTTLER 2.0 (in development, not deployed)
+## [Unreleased] - BUTTLER 2.0 (canonical read model live in production since the Stage 9 cutover)
 
 ### Added
 
@@ -20,6 +20,18 @@ All notable changes to Buttler are documented here.
 
 ### Changed
 
+- `/api/restrooms` now serves the canonical D1 read model in production
+  (Stage 9 cutover, verified against the live deployment in Stage 10);
+  the legacy `restroom_locations` table stays in D1 only as historical and
+  fallback infrastructure.
+- Stage 11 frontend cleanup: removed the unreachable legacy `AuditModal`
+  (posted to the off-stack `/api/audits`; Guardian architecture returns in
+  Stage 12) and `BidetCard` components, and corrected documentation that
+  still described the legacy bundled catalogue as the current source of
+  truth.
+- `scripts/generate-d1-seed.mjs --check` normalizes CRLF before comparing,
+  so a Windows CRLF checkout no longer reports a false "seed is stale"
+  result.
 - Offline fallback no longer serves the superseded legacy 1,112-row
   catalogue; online and offline use the same canonical dataset.
 - UI access labels are conservative: exact "public" only; stored `unknown`
