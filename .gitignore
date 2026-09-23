@@ -53,3 +53,11 @@ Thumbs.db
 .dev.vars.*
 # ...but keep the committed placeholder template (no real values).
 !.dev.vars.example
+
+# Vite / browser-side local env (Auth0 public values live here at dev time).
+# These files are inlined into the shipped bundle by the build, so they stay
+# local-only; only the placeholder templates are tracked.
+.env
+.env.*
+!.env.example
+!*.env.example
