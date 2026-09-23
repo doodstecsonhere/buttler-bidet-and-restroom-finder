@@ -128,10 +128,12 @@ locations, **845** provenance links, **1,112** legacy `restroom_locations` rows.
   Essentials+.
 - **Cloudflare integration / JWT-OIDC mechanics:** Auth0 is a standard OIDC
   provider issuing RS256 access/ID tokens verifiable against Auth0's public
-  **JWKS**. Verification is a **local cryptographic check** with the
-  isomorphic `jose` library in the Workers runtime — **no network call per request**, no
-  Node-only SDK required. This is exactly the `verifySession(token) → sub` shape
-  the seam expects. Auth0 explicitly supports headless/API-first auth.
+  **JWKS**. The current implementation verifies the signature **locally with the
+  WebCrypto `crypto.subtle` API built into the Cloudflare Workers runtime**, keyed
+  on the token's `kid` against Auth0's public JWKS — **no network call per request**
+  (the JWKS is cached), **no JWT library dependency**, and no Node-only SDK. This is
+  exactly the `verifySession(token) → sub` shape the seam expects. Auth0 explicitly
+  supports headless/API-first auth.
 - **Identity mapping:** stable immutable `sub` claim (e.g. `auth0|…`,
   `google-oauth2|…`). Email is a convenience, never the key.
 - **Authorization options:** can emit custom claims / RBAC, but Buttler does not
@@ -146,8 +148,9 @@ locations, **845** provenance links, **1,112** legacy `restroom_locations` rows.
 - **Operational risks:** **Custom domains require credit-card verification** (a
   real zero-dollar gotcha). Default `*.auth0.com` domain avoids the card but
   shows Auth0-branded Universal Login. Free log retention is 1 day. 1 tenant.
-- **Likely implementation complexity:** low — a `jose`-based `verifySession` plus
-  a browser Auth0 (or Authorization Code + PKCE) flow; no second datastore.
+- **Likely implementation complexity:** low — a WebCrypto (`crypto.subtle`)-based
+  `verifySession` plus a browser Auth0 (or Authorization Code + PKCE) flow; no
+  second datastore and no JWT library dependency.
 - **Likely cost path:** $0 up to 25K monthly-active authenticated contributors;
   only after that does a card + Essentials appear. For a Dumaguete City restroom
   app, 25K *monthly authenticating contributors* is a very high ceiling.
@@ -236,7 +239,7 @@ engineering reasons (§9).
 | Branding on free | Customizable | **Clerk badge, not removable on free** | None | Clerk badge is a commercial concern |
 | Abuse protection (free) | Brute-force + IP throttling | Bot + lockout + disposable-email block | Basic | All help; Buttler adds own limits regardless |
 | JWT / OIDC | Standard OIDC, RS256 + JWKS | JWT + JWKS (proprietary claims) | JWT + JWKS | All verifiable server-side |
-| Local JWT verification (no per-request network) | Yes (`jose`) | Yes (`jose` / `@clerk/backend`) | Yes (`jose` / `supabase-js`) | All fit the seam |
+| Local JWT verification (no per-request network) | Yes (WebCrypto `crypto.subtle`, no JWT lib) | Yes (`jose` / `@clerk/backend`) | Yes (`jose` / `supabase-js`) | All fit the seam |
 | Cloudflare Workers/Pages fit | Clean, headless, standards-first | Works, but frontend-SDK-first | Works, but project may pause | Auth0 smallest surface |
 | Contributor identity stability | Stable `sub` | Stable `user_…` | Stable UUID | All fit |
 | Account deletion / export | Yes | Full exports (free) | Yes | All fit |
@@ -273,9 +276,10 @@ JWT verification inside Pages Functions.
 
 1. **Cleanest fit for the actual seam.** Buttler's identity boundary is a
    deliberately tiny, headless `verifySession(token) → stable subject id`. Auth0
-   is standards-based OIDC whose RS256 JWT verifies **locally with `jose` against
-   a public JWKS** — no forced frontend SDK, no second database, no per-request
-   network call. This is the smallest change to `identity.ts`.
+   is standards-based OIDC whose RS256 JWT verifies **locally with the Workers
+   WebCrypto `crypto.subtle` API against a public JWKS** — no JWT library
+   dependency, no forced frontend SDK, no second database, no per-request network
+   call. This is the smallest change to `identity.ts`.
 2. **Stays at the boundary → lowest lock-in.** Because Auth0 speaks open OIDC,
    the whole provider coupling is: issuer URL + audience + `sub`. Swapping
    providers later does not touch D1, contribution history, moderation history,
@@ -331,8 +335,12 @@ choosing Supabase simply because it was used before.
 ```
 request → read bearer/cookie session token
         → verifySession(token):
-            - verify RS256 signature against Auth0 JWKS (cached), locally
-            - check iss (issuer), aud (client id / API audience), exp, nonce
+            - verify RS256 signature against Auth0 JWKS (cached), locally with
+              WebCrypto `crypto.subtle` (no JWT library)
+            - check iss (issuer), aud (API audience), azp, exp/nbf — deliberately
+              NO `nonce`: this verifies an OAuth2 bearer *access token* at the API
+              boundary, not an OIDC browser ID-token authentication transaction,
+              so a nonce would reject valid tokens and add no security
             - return the stable `sub`, or null
         → roleFor(sub, env)  // existing allow-list, unchanged
         → { configured: true, identity: { userId: sub, role } }
@@ -404,8 +412,13 @@ Everything downstream (`http.ts`, `authorize.ts`, store, contract, apply) is
 
 ## 15. Required secrets / env-var names (names only — never values)
 
-- `AUTH0_ISSUER_BASE_URL` — e.g. `https://<tenant>.<region>.auth0.com/`
-- `AUTH0_AUDIENCE` — the API identifier used as the JWT `aud`
+- `AUTH0_DOMAIN` — the Auth0 tenant domain, e.g. `<tenant>.<region>.auth0.com`
+  (scheme optional). It drives BOTH the expected issuer and the JWKS URL. This is
+  the **actual** env var read by the current implementation (it replaces the
+  earlier placeholder name `AUTH0_ISSUER_BASE_URL`).
+- `AUTH0_API_AUDIENCE` — the Auth0 API identifier used as the JWT `aud`. This is
+  the **actual** env var read by the current implementation (it replaces the earlier
+  placeholder name `AUTH0_AUDIENCE`).
 - `AUTH0_CLIENT_ID` — the application client id (public value; not a secret for
   PKCE, but keep server-side copies authoritative)
 - `BUTTLER_MODERATOR_IDS` — existing server-side allow-list (already defined)
