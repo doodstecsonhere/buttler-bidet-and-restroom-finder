@@ -11,6 +11,7 @@
     "test:d1-preview": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/d1-preview.test.mjs",
     "test:canonical-import": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/canonical-import.test.mjs",
     "test:no-redeploy": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/no-redeploy-data-change.test.mjs",
+    "test:stage13": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/stage13-contributions.test.mjs",
     "import:canonical:validate": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/import-canonical.mjs --validate",
     "import:canonical:write": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/import-canonical.mjs --write",
     "import:canonical:check": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/import-canonical.mjs --check",
