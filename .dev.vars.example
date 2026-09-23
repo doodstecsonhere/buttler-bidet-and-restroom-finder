@@ -1,0 +1,22 @@
+# Buttler 2.0 — Stage 13 identity: LOCAL development env template.
+#
+# Copy to `.dev.vars` (which is git-ignored) and fill with YOUR Auth0 values.
+# `.dev.vars` is read by `wrangler pages dev` / `wrangler dev` only. These three
+# values are NOT secrets — the Auth0 tenant domain, client id, and API audience
+# are all safe to expose to a browser. Still, keep real values out of Git.
+#
+# Leaving ANY of these blank keeps authentication "not configured", so protected
+# endpoints fail closed with 503. That is the intended safe default.
+
+# Auth0 tenant domain, no scheme, e.g. your-tenant.us.auth0.com
+AUTH0_DOMAIN=
+
+# The Auth0 API identifier configured as the token audience (`aud`).
+AUTH0_API_AUDIENCE=
+
+# Application client id (public). Optional; only cross-checked against `azp`.
+AUTH0_CLIENT_ID=
+
+# Server-side moderator allow-list: comma-separated Auth0 `sub` values.
+# Empty/absent means "no moderators" (fails closed). Never expose client-side.
+BUTTLER_MODERATOR_IDS=
