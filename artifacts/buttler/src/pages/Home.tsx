@@ -4,6 +4,8 @@ import { useGeolocation } from "@/hooks/use-geolocation";
 import { calculateDistance } from "@/lib/distance";
 import { Map } from "@/components/Map";
 import { RestroomCard } from "@/components/RestroomCard";
+import { AuthControl } from "@/auth/AuthControl";
+import { DevAuthProbe } from "@/auth/DevAuthProbe";
 import { MapPinOff, Loader2, Sparkles, Search, Droplets, Users, X, WifiOff, ServerCrash } from "lucide-react";
 import { motion } from "framer-motion";
 
@@ -62,13 +64,7 @@ export default function Home() {
             <h1 className="font-display font-bold text-base text-foreground leading-none">Buttler</h1>
             <p className="text-primary font-medium text-[10px] tracking-wide uppercase truncate">Bidet & Restroom Finder</p>
           </div>
-          <button
-            type="button"
-            disabled
-            className="text-[10px] font-semibold text-sky-700 bg-sky-100 px-2 py-1 rounded-full flex-shrink-0 cursor-not-allowed opacity-75"
-          >
-            Log in — coming soon
-          </button>
+          <AuthControl size="sm" />
         </div>
       </div>
 
@@ -94,13 +90,7 @@ export default function Home() {
               Bidet & Restroom Finder
             </p>
           </div>
-          <button
-            type="button"
-            disabled
-            className="text-xs font-semibold text-sky-700 bg-sky-100 px-3 py-1.5 rounded-full cursor-not-allowed opacity-75"
-          >
-            Log in — coming soon
-          </button>
+          <AuthControl size="md" />
         </div>
 
         {/* Search + Filters */}
@@ -169,6 +159,14 @@ export default function Home() {
             {filteredRestrooms.length} found
           </span>
         </div>
+        {/* Development-only bearer-token probe. Vite folds `import.meta.env.DEV`
+            to false in a production build, so this block is dropped from the
+            bundle and never appears on buttler.pages.dev. */}
+        {import.meta.env.DEV && (
+          <div className="px-4 pb-1">
+            <DevAuthProbe />
+          </div>
+        )}
 
         {/* Scrollable list */}
         <div className="flex-1 overflow-y-auto px-4 pb-4 space-y-3">

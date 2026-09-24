@@ -214,6 +214,9 @@ importers:
 
   artifacts/buttler:
     dependencies:
+      '@auth0/auth0-spa-js':
+        specifier: 2.27.0
+        version: 2.27.0
       '@hookform/resolvers':
         specifier: ^3.10.0
         version: 3.10.0(react-hook-form@7.71.2(react@19.1.0))
@@ -673,6 +676,12 @@ packages:
     engines: {node: '>=10'}
     peerDependencies:
       ajv: '>=8'
+
+  '@auth0/auth0-auth-js@1.15.0':
+    resolution: {integrity: sha512-obn/Qhxx3eNs2wV6/lLsIDIcEiSJvBEEy15hppB5Me1j2No2toa7KqQcXHBCyGX4mBBdVnxZJBjEX6E4WanYwg==}
+
+  '@auth0/auth0-spa-js@2.27.0':
+    resolution: {integrity: sha512-E9U4v9IiowT+z26PQYT55ZAU5J1feyEV9umVX+lvnaHl43E3GvGVsTrfukhPLLWnoCRItWa2TxVQ3Svj1S4qyA==}
 
   '@babel/code-frame@7.29.0':
     resolution: {integrity: sha512-9NhCeYjq9+3uxgdtp20LSiJXJvN0FeCtNGpJxuMFZ1Kv3cWUNb6DOhJwUvcVCzKGR66cw4njwM6hrJLqgOwbcw==}
@@ -2393,6 +2402,9 @@ packages:
     resolution: {integrity: sha512-yQbXgO/OSZVD2IsiLlro+7Hf6Q18EJrKSEsdoMzKePKXct3gvD8oLcOQdIzGupr5Fj+EDe8gO/lxc1BzfMpxvA==}
     engines: {node: '>=8'}
 
+  browser-tabs-lock@1.3.0:
+    resolution: {integrity: sha512-g6nHaobTiT0eMZ7jh16YpD2kcjAp+PInbiVq3M1x6KKaEIVhT4v9oURNIpZLOZ3LQbQ3XYfNhMAb/9hzNLIWrw==}
+
   browserslist@4.28.1:
     resolution: {integrity: sha512-ZC5Bd0LgJXgwGqUknZY/vkUQ04r8NXnJZ3yYi4vDmSiZmC/pdSN0NbNRPxZpbtO4uAfDUAFffO8IZoM3Gj8IkA==}
     engines: {node: ^6 || ^7 || ^8 || ^9 || ^10 || ^11 || ^12 || >=13.7}
@@ -2607,6 +2619,9 @@ packages:
   dom-helpers@5.2.1:
     resolution: {integrity: sha512-nRCa7CK3VTrM2NmGkIy4cbK7IZlgBE/PYMn55rrXefr5xXDP0LdtfPnblFDoVdcAfslJ7or6iqAUnx0CCGIWQA==}
 
+  dpop@2.1.2:
+    resolution: {integrity: sha512-hN3XjjCcgYWmNL8DFAV1Z3alXIvLolvjis189NI/U4k4Iu/m4rBeUYObbIjnRzQYDQv4zMaXXskjVDqSkmyh7Q==}
+
   drizzle-kit@0.31.9:
     resolution: {integrity: sha512-GViD3IgsXn7trFyBUUHyTFBpH/FsHTxYJ66qdbVggxef4UBPHRYxQaRzYLTuekYnk9i5FIEL9pbBIwMqX/Uwrg==}
     hasBin: true
@@ -2756,6 +2771,9 @@ packages:
   es-abstract@1.24.1:
     resolution: {integrity: sha512-zHXBLhP+QehSSbsS9Pt23Gg964240DPd6QCf8WpkqEXxQ7fhdZzYsocOr5u7apWonsS5EjZDmTF+/slGMyasvw==}
     engines: {node: '>= 0.4'}
+
+  es-cookie@1.3.2:
+    resolution: {integrity: sha512-UTlYYhXGLOy05P/vKVT2Ui7WtC7NiRzGtJyAKKn32g5Gvcjn7KAClLPWlipCtxIus934dFg9o9jXiBL0nP+t9Q==}
 
   es-define-property@1.0.1:
     resolution: {integrity: sha512-e3nRfgfUZ4rNGL232gUgX06QNyyez04KdjFrF+LTRoOXmrOgFKDg4BCdsjW8EnT69eqdYGmRpJwiPVYNrCaW3g==}
@@ -4301,6 +4319,18 @@ snapshots:
       ajv: 8.18.0
       jsonpointer: 5.0.1
       leven: 3.1.0
+
+  '@auth0/auth0-auth-js@1.15.0':
+    dependencies:
+      jose: 6.2.2
+      openid-client: 6.8.2
+
+  '@auth0/auth0-spa-js@2.27.0':
+    dependencies:
+      '@auth0/auth0-auth-js': 1.15.0
+      browser-tabs-lock: 1.3.0
+      dpop: 2.1.2
+      es-cookie: 1.3.2
 
   '@babel/code-frame@7.29.0':
     dependencies:
@@ -6348,6 +6378,10 @@ snapshots:
     dependencies:
       fill-range: 7.1.1
 
+  browser-tabs-lock@1.3.0:
+    dependencies:
+      lodash: 4.18.1
+
   browserslist@4.28.1:
     dependencies:
       baseline-browser-mapping: 2.10.0
@@ -6544,6 +6578,8 @@ snapshots:
       '@babel/runtime': 7.28.6
       csstype: 3.2.3
 
+  dpop@2.1.2: {}
+
   drizzle-kit@0.31.9:
     dependencies:
       '@drizzle-team/brocli': 0.10.2
@@ -6659,6 +6695,8 @@ snapshots:
       typed-array-length: 1.0.7
       unbox-primitive: 1.1.0
       which-typed-array: 1.1.20
+
+  es-cookie@1.3.2: {}
 
   es-define-property@1.0.1: {}
 
