@@ -14,6 +14,7 @@
     "test:stage13": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/stage13-contributions.test.mjs",
     "test:stage13-identity": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/stage13-identity.test.mjs",
     "test:stage13-frontend": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/stage13-frontend-auth.test.mjs",
+    "test:stage13-contrib-ui": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/stage13-contribution-ui.test.mjs",
     "import:canonical:validate": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/import-canonical.mjs --validate",
     "import:canonical:write": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/import-canonical.mjs --write",
     "import:canonical:check": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/import-canonical.mjs --check",
