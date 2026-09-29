@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import { Link } from "wouter";
 import { useOfflineRestrooms } from "@/hooks/use-offline-restrooms";
 import { useGeolocation } from "@/hooks/use-geolocation";
 import { calculateDistance } from "@/lib/distance";
@@ -64,7 +65,15 @@ export default function Home() {
             <h1 className="font-display font-bold text-base text-foreground leading-none">Buttler</h1>
             <p className="text-primary font-medium text-[10px] tracking-wide uppercase truncate">Bidet & Restroom Finder</p>
           </div>
-          <AuthControl size="sm" />
+          <div className="flex items-center gap-1.5 min-w-0">
+            <Link
+              href="/contribute"
+              className="text-[10px] font-semibold rounded-full whitespace-nowrap px-2 py-1 text-sky-700 bg-sky-100 hover:bg-sky-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 transition-colors"
+            >
+              Contribute
+            </Link>
+            <AuthControl size="sm" />
+          </div>
         </div>
       </div>
 
@@ -90,7 +99,15 @@ export default function Home() {
               Bidet & Restroom Finder
             </p>
           </div>
-          <AuthControl size="md" />
+          <div className="flex items-center gap-1.5">
+            <Link
+              href="/contribute"
+              className="text-xs font-semibold rounded-full whitespace-nowrap px-3 py-1.5 text-sky-700 bg-sky-100 hover:bg-sky-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 transition-colors"
+            >
+              Contribute
+            </Link>
+            <AuthControl size="md" />
+          </div>
         </div>
 
         {/* Search + Filters */}

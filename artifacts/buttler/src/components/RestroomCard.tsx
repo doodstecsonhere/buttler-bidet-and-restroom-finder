@@ -1,4 +1,5 @@
 import { Navigation, MapPin, Droplets, Users, Lock, CircleQuestionMark } from "lucide-react";
+import { Link } from "wouter";
 import { formatDistance } from "@/lib/distance";
 import { motion } from "framer-motion";
 import type { BidetEvidence } from "../../../../lib/restroom-data";
@@ -18,10 +19,15 @@ interface RestroomCardProps {
   audited: boolean;
 }
 
-export function RestroomCard({ name, latitude, longitude, address, access, fee, bidet, bidetEvidence, distance, index, audited }: RestroomCardProps) {
+export function RestroomCard({ id, name, latitude, longitude, address, access, fee, bidet, bidetEvidence, distance, index, audited }: RestroomCardProps) {
   const openDirections = () => {
     window.open(`https://www.google.com/maps/dir/?api=1&destination=${latitude},${longitude}`, '_blank', 'noopener,noreferrer');
   };
+
+  // Stage 13: only canonical string ids are valid contribution targets, so the
+  // deep link appears exactly when the backend would accept the target.
+  const canonicalTarget =
+    typeof id === "string" && /^buttler_loc_[0-9a-f]{20}$/.test(id) ? id : null;
 
   // Conservative public classification: only the exact stored value "public"
   // is presented as Public. "unknown" stays honest as "Access unconfirmed"
@@ -99,6 +105,14 @@ export function RestroomCard({ name, latitude, longitude, address, access, fee, 
               </span>
             )}
           </div>
+          {canonicalTarget && (
+            <Link
+              href={`/contribute?target=${canonicalTarget}`}
+              className="inline-block mt-2 text-[11px] font-semibold text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 rounded px-0.5"
+            >
+              Report an issue
+            </Link>
+          )}
         </div>
 
         <button
