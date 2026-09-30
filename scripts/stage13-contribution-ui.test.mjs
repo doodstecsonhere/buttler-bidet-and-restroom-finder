@@ -597,4 +597,85 @@ for (const path of CONTRIBUTION_SOURCES) {
   assert.match(contribute, /<strong>not<\/strong>/);
 }
 
+// ---------------------------------------------------------------------------
+// 8. Post-E2E hardening (Stage 13 local verification findings)
+// ---------------------------------------------------------------------------
+
+{
+  // FIX 2 regression. The create endpoint really answers 201 with the store's
+  // camelCase `contributionId`; the client must read it as success, never as
+  // "unexpected reply". The snake_case echo stays accepted for compatibility.
+  const camel = await harness({
+    handler: () => json({ contributionId: 'contrib_' + 'c'.repeat(32), status: 'pending' }, 201),
+  }).client.submit(SUBMIT_DRAFT());
+  assert.deepEqual(camel, {
+    ok: true,
+    value: { contributionId: 'contrib_' + 'c'.repeat(32), status: 'pending' },
+  });
+
+  const snake = await harness({
+    handler: () => json({ contribution_id: 'contrib_' + 'd'.repeat(32), status: 'pending' }, 201),
+  }).client.submit(SUBMIT_DRAFT());
+  assert.equal(snake.ok, true, 'the snake_case echo must keep working');
+  assert.equal(snake.value.contributionId, 'contrib_' + 'd'.repeat(32));
+
+  // A 201 with neither shape is still an honest service error.
+  const empty = await harness({ handler: () => json({}, 201) }).client.submit(
+    SUBMIT_DRAFT(),
+  );
+  assert.equal(empty.ok, false);
+  assert.equal(empty.code, 'server');
+}
+
+{
+  // FIX 3 regression. A moderator deciding their OWN submission gets a 403
+  // whose body says "cannot moderate your own submission" — the only
+  // server-side signal that distinguishes this case. The client must surface
+  // it accurately instead of the misleading "moderators only" wording, and
+  // must keep the original code so nothing else changes behaviour.
+  for (const verb of ['approve', 'reject']) {
+    const { client } = harness({
+      handler: () => json({ error: 'cannot moderate your own submission' }, 403),
+    });
+    const result = await client.decide('contrib_' + 'e'.repeat(32), verb, '');
+    assert.equal(result.ok, false);
+    assert.equal(result.code, 'forbidden');
+    assert.equal(result.message, "You can't approve or reject your own submission.");
+  }
+
+  // A plain non-moderator 403 keeps the existing wording untouched.
+  const { client } = harness({ handler: () => json({ error: 'moderator role required' }, 403) });
+  const forbidden = await client.decide('contrib_' + 'f'.repeat(32), 'approve', '');
+  assert.equal(forbidden.ok, false);
+  assert.equal(forbidden.code, 'forbidden');
+  assert.equal(forbidden.message, 'This step is only for Buttler moderators.');
+
+  // The queue's forbidden 403 (no own-submission signal) also keeps its text.
+  const queue = await harness({ handler: () => json({ error: 'moderator role required' }, 403) }).client.queue();
+  assert.equal(queue.message, 'This step is only for Buttler moderators.');
+}
+
+{
+  // FIX 1 regression (static half). A deep-linked target's name only arrives
+  // once the async catalogue resolves, so the form must adopt the late name
+  // instead of keeping the initial "this place" fallback.
+  const contribute = sources.get('../artifacts/buttler/src/pages/Contribute.tsx');
+  assert.match(
+    contribute,
+    /useEffect\(\(\) => \{\s*setTargetName\(fixedTargetName\);\s*\}, \[fixedTargetName\]\)/,
+    'deep-linked target name must react to the catalogue arriving',
+  );
+}
+
+{
+  // FIX 4 regression (static half). The moderation filter toolbar must wrap
+  // instead of overflowing at narrow phone widths.
+  const moderation = sources.get('../artifacts/buttler/src/pages/Moderation.tsx');
+  assert.match(
+    moderation,
+    /<div className="flex flex-wrap items-center gap-2">/,
+    'the toolbar container must allow wrapping',
+  );
+}
+
 console.log("STAGE13_CONTRIBUTION_UI_TEST_SUCCESS");

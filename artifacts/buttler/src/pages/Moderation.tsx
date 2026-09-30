@@ -31,6 +31,7 @@ import {
 } from "@/contributions/ui-vocabulary";
 import type {
   ContributionResult,
+  FailureCode,
   ModeratedContribution,
 } from "@/contributions/client";
 import {
@@ -76,7 +77,10 @@ function ModerationWorkspace() {
   const [filter, setFilter] = useState<string>("");
   const [openId, setOpenId] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const [decisionError, setDecisionError] = useState<string | null>(null);
+  const [decisionError, setDecisionError] = useState<{
+    code: FailureCode;
+    message: string;
+  } | null>(null);
   const [confirming, setConfirming] = useState<
     { item: ModeratedContribution; decision: "approve" | "reject" } | null
   >(null);
@@ -110,7 +114,7 @@ function ModerationWorkspace() {
     setConfirming(null);
     setNote("");
     if (!result.ok) {
-      setDecisionError(result.message);
+      setDecisionError({ code: result.code, message: result.message });
       return;
     }
     // Reflect the new status immediately, then re-pull the queue so filters
@@ -163,7 +167,7 @@ function ModerationWorkspace() {
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center gap-2">
+      <div className="flex flex-wrap items-center gap-2">
         <label htmlFor="queue-filter" className="text-xs font-semibold text-foreground">
           Show
         </label>
@@ -238,7 +242,9 @@ function ModerationWorkspace() {
         </ul>
       )}
 
-      {decisionError && <FailureNotice code="server" message={decisionError} />}
+      {decisionError && (
+        <FailureNotice code={decisionError.code} message={decisionError.message} />
+      )}
     </div>
   );
 }

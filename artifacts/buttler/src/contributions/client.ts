@@ -256,6 +256,21 @@ async function failureFromResponse(response: Response): Promise<{ code: FailureC
       // fall through to the generic message
     }
   }
+  // A 403 on a decision carries the server's own "... your own submission"
+  // reason (lib/contributions/authorize.ts). That is the only signal which
+  // distinguishes "not a moderator" from "a moderator deciding their own
+  // report", so surface the accurate wording instead of the misleading
+  // moderators-only text. The refusal itself stays entirely server-side.
+  if (response.status === 403) {
+    try {
+      const parsed = (await response.json()) as { error?: unknown };
+      if (typeof parsed.error === "string" && parsed.error.includes("own submission")) {
+        return { code: "forbidden", message: "You can't approve or reject your own submission." };
+      }
+    } catch {
+      // fall through to the generic message
+    }
+  }
   return mapped;
 }
 
@@ -328,10 +343,20 @@ export function createContributionsClient(deps: ContributionsClientDeps): Contri
             body: JSON.stringify(throwIfInvalid(draft)),
           }),
         (payload) => {
-          const value = payload as { contribution_id?: unknown; status?: unknown };
-          if (typeof value?.contribution_id !== "string") return null;
+          // The create endpoint echoes the store's in-memory shape
+          // (`contributionId`), while list projections use the DB column name
+          // (`contribution_id`). Accept either so a 201 is never misread as a
+          // service error.
+          const value = payload as { contribution_id?: unknown; contributionId?: unknown; status?: unknown };
+          const contributionId =
+            typeof value?.contribution_id === "string"
+              ? value.contribution_id
+              : typeof value?.contributionId === "string"
+                ? value.contributionId
+                : null;
+          if (contributionId === null) return null;
           return {
-            contributionId: value.contribution_id,
+            contributionId,
             status: typeof value.status === "string" ? value.status : "pending",
           };
         },

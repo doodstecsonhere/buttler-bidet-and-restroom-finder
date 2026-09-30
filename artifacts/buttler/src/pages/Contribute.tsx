@@ -13,7 +13,7 @@
  * This page never writes canonical data: a successful submission is a
  * PENDING row in the moderation queue, and the success screen says so.
  */
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Link, useSearchParams } from "wouter";
 import { CheckCircle2, Plus, X } from "lucide-react";
 import type { ContributionKind } from "../../../../lib/contributions/contract";
@@ -112,6 +112,12 @@ function ContributionForm({
   const [values, setValues] = useState<FieldValues>(emptyValues());
   const [targetId, setTargetId] = useState<string | null>(fixedTargetId);
   const [targetName, setTargetName] = useState<string | null>(fixedTargetName);
+  // A deep-linked target's name arrives only once the async catalogue resolves,
+  // after this form has already mounted; adopt it instead of showing the
+  // "this place" fallback forever.
+  useEffect(() => {
+    setTargetName(fixedTargetName);
+  }, [fixedTargetName]);
   const [notes, setNotes] = useState("");
   const [evidence, setEvidence] = useState<EvidenceDraft[]>([]);
   const [submitting, setSubmitting] = useState(false);
