@@ -3,6 +3,9 @@ import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { AuthProvider } from "@/auth/AuthProvider";
 import Home from "@/pages/Home";
+import Contribute from "@/pages/Contribute";
+import MyContributions from "@/pages/MyContributions";
+import Moderation from "@/pages/Moderation";
 import NotFound from "@/pages/not-found";
 import { InstallBanner } from "@/components/InstallBanner";
 
@@ -10,6 +13,11 @@ function Router() {
   return (
     <Switch>
       <Route path="/" component={Home} />
+      {/* Stage 13 contribution workflow. The pages gate on sign-in STATE and
+          let the server decide permissions — see src/contributions/*. */}
+      <Route path="/contribute" component={Contribute} />
+      <Route path="/my-contributions" component={MyContributions} />
+      <Route path="/moderation" component={Moderation} />
       <Route component={NotFound} />
     </Switch>
   );
