@@ -28,15 +28,13 @@ import { planCanonicalApply, renderApplyStatement, WRITABLE_CANONICAL_COLUMNS } 
 import { authorizeDecision, authorizeRead } from "../lib/contributions/authorize.ts";
 
 const migrationsDir = new URL("../d1/migrations/", import.meta.url);
-const stagedDir = new URL("../d1/contributions/", import.meta.url);
 
-// --- Build the database: every committed migration, then the STAGED schema ---
+// --- Build the database: every committed migration (0005 is now promoted) ---
 const sqlite = new DatabaseSync(":memory:");
 sqlite.exec("PRAGMA foreign_keys = ON;");
 for (const name of readdirSync(migrationsDir).filter((n) => n.endsWith(".sql")).sort()) {
   sqlite.exec(readFileSync(new URL(name, migrationsDir), "utf8"));
 }
-sqlite.exec(readFileSync(new URL("0005_create_contributions.sql", stagedDir), "utf8"));
 
 // Minimal D1-shaped adapter over node:sqlite so the store's real SQL runs here.
 function makeD1(db) {
