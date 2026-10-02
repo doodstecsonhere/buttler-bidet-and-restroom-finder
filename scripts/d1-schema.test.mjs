@@ -41,7 +41,10 @@ const tables = database
 assert.deepEqual(
   tables.map(({ name }) => name),
   [
+    // Stage 14B adds the append-only canonical promotion ledger (0006);
+    // this guard is the committed table-set check the 0005 history notes.
     "canonical_locations",
+    "canonical_promotions",
     "contribution_events",
     "contributions",
     "location_provenance",
