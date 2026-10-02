@@ -17,15 +17,18 @@
 //
 // THE FAIL-CLOSED CONTRACT (unchanged, and the reason tests still see 503):
 //   - No Auth0 config  -> `{ configured: false }`. Handlers answer 503
-//     ("contributions are not open yet"). This is production reality until the
-//     owner adds the env vars AND separately enables the contribution schema.
+//     ("contributions are not open yet"). This remains production reality
+//     until the owner adds the env vars; the schema side is already in place
+//     (see the note below).
 //   - Config present but the caller has no/invalid token -> `{ configured: true,
 //     identity: null }`. Handlers answer 401. Never an anonymous pass.
 //   - Config present and a valid token -> `{ configured: true, identity }` where
 //     `identity.userId` is the immutable Auth0 `sub` and the role comes ONLY from
 //     the server-side allow-list. Verifying identity does NOT by itself open
-//     contribution writes: those still need the staged schema, which remains out
-//     of d1/migrations/ and guarded by scripts/d1-schema.test.mjs.
+//     contribution writes: the contribution schema now lives in
+//     `d1/migrations/` (0005, promoted and applied to production), but the
+//     endpoints stay gated by this authentication seam plus the role-based
+//     authorization rules, exactly as before.
 //
 // WHY NO `nonce` CHECK:
 //   A nonce belongs to the browser-side OIDC flow (ID token). Here we verify an

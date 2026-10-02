@@ -1,11 +1,11 @@
 # Buttler 2.0 — Stage 13: Moderation & operations
 
-Status: **foundation built, live enablement blocked on one owner decision
-(authentication).** This stage takes the Stage 12 design to a safe, minimal,
-auditable contribution + moderation foundation. It changes **no** production
-data, applies **no** migration, deploys **nothing**, and ships **no** live
-public write — because the one dependency it genuinely cannot self-supply,
-secure authentication, is an owner choice.
+Status: **foundation built; contribution schema promoted to `d1/migrations/`
+and applied to production (owner-approved, separate phase); live write path still
+gated on the Auth0 env vars + Pages deployment.** This stage's branch changed **no**
+production data and deployed **nothing**; it shipped no live public write, because
+the one dependency it originally could not self-supply — secure authentication —
+was later chosen (Auth0) and integrated in a separate approved phase.
 
 The one rule everything else follows, carried forward unchanged from Stage 12:
 
@@ -42,11 +42,13 @@ in production is **BLOCKED** pending the owner's authentication decision below.
   **`503`** before it ever touches the database. An anonymous or spoofed write is
   therefore structurally impossible right now — the same guarantee the Stage 13
   brief asks for ("unauthenticated contribution rejection").
-* The contribution schema is **staged**, not applied: it lives in
-  `d1/contributions/` and is **deliberately kept out of `d1/migrations/`** so the
-  committed guard test (`scripts/d1-schema.test.mjs`), which asserts exactly
-  three tables, still passes and the "contributions are disabled" production
-  invariant holds until the owner approves.
+* The contribution schema has been **promoted and applied**: `0005` now lives in
+  `d1/migrations/` and was applied exactly once to production after the owner
+  approved enabling contributions (backup + tested rollback first). The guard
+  test (`scripts/d1-schema.test.mjs`) was updated to the current five-table
+  invariant. The live write path remains closed until the Auth0 env vars are
+  configured in production and the app is deployed — schema presence alone
+  opens no public write.
 
 ---
 
@@ -64,7 +66,7 @@ is the seam that the chosen provider plugs into.
 | Auth seam | `functions/_lib/identity.ts` | The documented swap point; today returns "not configured" so protected routes reject. Role = server-side allow-list, no secrets invented. |
 | Data access | `functions/_lib/contributions-store.ts` | Parameterised D1 reads/writes for `contributions`/`contribution_events` only. Pending caps, duplicate detection, forced `pending` status, server-set identity/timestamps, append-only events. |
 | HTTP surface | `functions/api/contributions.ts`, `.../contributions/[id].ts`, `.../me/contributions.ts`, `.../moderation/contributions.ts`, `.../moderation/contributions/[id]/[decision].ts` | The Stage 12 API contract, fail-closed until auth lands. |
-| Staged schema + rollback | `d1/contributions/0005_create_contributions.sql`, `d1/contributions/rollback/0005_drop_contributions.sql` | Additive two-table schema (validated) with a clean reverse script. |
+| Applied schema + rollback | `d1/migrations/0005_create_contributions.sql` (promoted, applied to production), `d1/rollback/0005_drop_contributions.sql` | Additive two-table schema (validated) with a clean reverse script. |
 | Behaviour test | `scripts/stage13-contributions.test.mjs` (`pnpm test:stage13`) | Proves the 24 required conditions against in-memory D1 + the real 776/845/1,112 dataset. |
 
 ### Contribution kinds supported (from Stage 12)
@@ -127,10 +129,12 @@ No other file changes.
 
 1. **Choose + configure an authentication provider** (A/B/C above). This is the
    real gate.
-2. **Decide whether to enable contributions** — promote `d1/contributions/0005`
-   into `d1/migrations/`, update `scripts/d1-schema.test.mjs` to the new table
-   set, and apply to production **only after** a verified backup and a
-   tested rollback on a disposable database. Never `--force`.
+2. ~~**Decide whether to enable contributions**~~ — **DONE (owner-approved):**
+   `0005` was promoted into `d1/migrations/`, `scripts/d1-schema.test.mjs` was
+   updated to the five-table set, and the migration was applied to production
+   after a verified backup and a rollback tested on a disposable database
+   (never `--force`). Remaining: configure the Auth0 env vars in Pages and
+   deploy, which is the next separately-approved gate.
 3. **Decide whether to enable canonical promotion (apply)** — the
    `applyApprovedToCanonical` path is intentionally not wired to any endpoint.
    Turning moderation into live canonical edits is its own approval.
@@ -145,7 +149,7 @@ No other file changes.
   — covers all 24 brief conditions; asserts the real **776 canonical / 845
   provenance / 1,112 legacy** rows stay intact and that only the allow-listed
   apply path ever edits a canonical column.
-* Regression suite still green: `d1-schema` (three-table guard), `d1-preview`,
+* Regression suite still green: `d1-schema` (five-table guard), `d1-preview`,
   `canonical-import`, `no-redeploy`, `map-offline`, `pwa-build`.
 * Root `tsc --build` shows only the two pre-existing, out-of-scope errors
   (`lib/api-zod`, `lib/replit-auth-web`); this stage adds none. The new modules
@@ -159,13 +163,16 @@ No other file changes.
 
 ## Production safety & rollback
 
-* **No** production data, migration, secret, or deploy was touched. No fake
-  users or contributions were seeded.
+* **No** production data or deploy was touched on this stage's branch; the
+  production migration itself was applied later, in its own owner-approved
+  phase with a verified backup.
 * **Git rollback:** revert this branch's commit(s) with a reversal commit — no
   history rewrite, no force push.
-* **Schema rollback:** nothing to roll back (schema never applied). If ever
-  applied, `d1/contributions/rollback/0005_drop_contributions.sql` restores the
-  prior structure; it drops only the two new tables, never canonical/legacy data.
+* **Schema rollback:** the production `contributions` / `contribution_events`
+  tables (currently empty) can be reversed with
+  `d1/rollback/0005_drop_contributions.sql` — restore-verified on
+  a disposable database; it drops only the two new tables, never
+  canonical/legacy data.
 * **Not reversible casually:** none of this stage's changes are irreversible;
   the irreversible actions (production migration, enabling live writes,
   connecting a provider) are precisely the ones left to the owner.

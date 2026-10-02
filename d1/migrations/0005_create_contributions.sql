@@ -1,22 +1,20 @@
--- Buttler 2.0 — Stage 13 contribution schema (STAGED, not yet applied).
+-- Buttler 2.0 — Stage 13 contribution schema (PROMOTED and APPLIED to
+-- production — owner-approved, 2026-10-01).
 --
--- This file lives in `d1/contributions/`, NOT `d1/migrations/`, ON PURPOSE:
---   * The committed guard `scripts/d1-schema.test.mjs` asserts that applying
---     everything in `d1/migrations/` yields exactly three tables — a deliberate
---     "community contributions are disabled until auth/authz/abuse/moderation
---     are separately approved" invariant (see d1/README.md). Moving this file
---     into the auto-applied directory would pre-empt that approval and break
---     the guard.
---   * Contributions cannot go live without an approved authentication provider
---     (docs/stage13-moderation-operations.md). Until then this schema stays
---     staged and inert.
+-- History: this migration was originally staged under `d1/contributions/`,
+-- deliberately kept out of `d1/migrations/` while the "community contributions
+-- are disabled until auth/authz/abuse/moderation are separately approved"
+-- invariant held (the committed guard `scripts/d1-schema.test.mjs` then asserted
+-- exactly three tables). After the owner approved enabling contributions, the
+-- file was promoted here, the guard was updated to the current five-table set,
+-- and the migration was applied exactly once to the production D1
+-- `buttler-read-model` following the backup-and-rollback protocol. The ledger
+-- now lists 0001–0004 (_01…_22) and 0005 with nothing pending.
 --
--- When the owner approves enabling contributions, the promotion is a two-part,
--- separately-approved action:
---   1. move/copy this file into `d1/migrations/` and update
---      `scripts/d1-schema.test.mjs` to the new expected table set, and
---   2. apply it to the real database ONLY after backing up and testing the
---      rollback on a disposable database (never `--force`).
+-- The rule that gating protected this schema is unchanged: A USER SUBMISSION IS
+-- NEVER CANONICAL DATA. Live contribution writes remain gated by the Auth0
+-- identity seam and the moderator allow-list (docs/stage13-moderation-
+-- operations.md); applying this schema did not open any public write.
 --
 -- It is strictly ADDITIVE: creates two new tables and their indexes only. It
 -- does not touch canonical_locations, location_provenance, the legacy
