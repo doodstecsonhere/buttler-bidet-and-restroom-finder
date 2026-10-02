@@ -3,10 +3,10 @@
 // Proves the safe operational foundation: an authenticated, allow-listed
 // contribution flow, an append-only moderation trail, and — critically — that
 // nothing short of the explicitly-privileged canonical-apply path can change a
-// canonical row. It runs the STAGED contribution schema (d1/contributions) on
-// top of the real production migrations against a throwaway in-memory SQLite
-// (the D1 engine). It NEVER touches the bound database, a Cloudflare account, or
-// any secret.
+// canonical row. It runs the real, committed production migrations — including
+// the now-promoted 0005 contribution schema in d1/migrations/ — against a
+// throwaway in-memory SQLite (the D1 engine). It NEVER touches the bound
+// database, a Cloudflare account, or any secret.
 //
 // Run: node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/stage13-contributions.test.mjs
 import assert from "node:assert/strict";
