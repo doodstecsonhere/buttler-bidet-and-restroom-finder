@@ -34,7 +34,9 @@ const offline = await loadRestrooms(async () => {
 });
 assert.equal(offline.source, "bundled");
 assert.equal(offline.failure, "offline");
-assert.equal(offline.data.length, 777);
+// 776 active rows: the 777-row seed minus the Stage 14K Pulantubig duplicate
+// a recorded reconciliation retired (offline mirrors the live API filter).
+assert.equal(offline.data.length, 776);
 assert.equal(offline.data, BUNDLED_RESTROOMS);
 
 // A server-side HTTP error must never be mislabelled as the user being

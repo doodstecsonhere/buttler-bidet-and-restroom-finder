@@ -32,6 +32,17 @@ import { parseCsvRecords } from "./src/csv.mjs";
 
 const CANONICAL_CSV = new URL("../attached_assets/buttler_locations_canonical.csv", import.meta.url);
 const PROVENANCE_CSV = new URL("../attached_assets/buttler_location_provenance.csv", import.meta.url);
+// Stage 14K.1: ordered post-base reconciliation operations. The two owner CSVs
+// above stay the frozen-base cutover snapshot (0001-0007 must never change),
+// so canonical reconciliations decided AFTER that base — duplicate merges,
+// field corrections — are recorded here as explicit, replay-safe operations.
+// Generators (offline bundle) apply them to derive the EFFECTIVE current
+// canonical dataset; the D1-side mirror of each operation set is a forward
+// reconciliation migration (currently 0008). See d1/README.md.
+const RECONCILIATIONS_CSV = new URL(
+  "../attached_assets/buttler_canonical_reconciliations.csv",
+  import.meta.url,
+);
 const MIGRATIONS_DIR = new URL("../d1/migrations/", import.meta.url);
 const DDL_FILE = "0003_create_canonical_read_model.sql";
 const SEED_BASE = "0004_seed_canonical_locations";
@@ -166,6 +177,10 @@ export function sha256(buffer) {
 }
 
 export function loadCanonicalDataset({ canonicalPath = CANONICAL_CSV, provenancePath = PROVENANCE_CSV } = {}) {
+  return buildDataset(loadCsvRows(canonicalPath), loadCsvRows(provenancePath), canonicalPath, provenancePath);
+}
+
+function loadCsvRows(path) {
   // Hash and parse the LF-normalized bytes. Git checks these CSVs out with
   // CRLF on Windows (core.autocrlf=true) but stores LF in the index, so hashing
   // the raw working-tree bytes produced a false "stale" fingerprint on Windows
@@ -173,20 +188,198 @@ export function loadCanonicalDataset({ canonicalPath = CANONICAL_CSV, provenance
   // identical on every platform, which is what the frozen 0004_* headers and the
   // generated 0007 additions header both rely on. (Established LF-normalized
   // equivalence check; see d1/README.md and the Stage 5C-B splitter notes.)
-  const canonicalText = readFileSync(canonicalPath).toString("utf8").replaceAll("\r\n", "\n");
-  const provenanceText = readFileSync(provenancePath).toString("utf8").replaceAll("\r\n", "\n");
-  const canonical = parseCsvRecords(canonicalText);
-  const provenance = parseCsvRecords(provenanceText);
+  const text = readFileSync(path).toString("utf8").replaceAll("\r\n", "\n");
+  return parseCsvRecords(text).records;
+}
+
+function buildDataset(canonicalRecords, provenanceRecords, canonicalPath, provenancePath) {
   return {
-    canonical: canonical.records,
-    provenance: provenance.records,
+    canonical: canonicalRecords,
+    provenance: provenanceRecords,
     fingerprints: {
-      canonical_csv_sha256: sha256(Buffer.from(canonicalText, "utf8")),
-      provenance_csv_sha256: sha256(Buffer.from(provenanceText, "utf8")),
-      canonical_rows: canonical.records.length,
-      provenance_rows: provenance.records.length,
+      canonical_csv_sha256: sha256(Buffer.from(readFileSync(canonicalPath).toString("utf8").replaceAll("\r\n", "\n"), "utf8")),
+      provenance_csv_sha256: sha256(Buffer.from(readFileSync(provenancePath).toString("utf8").replaceAll("\r\n", "\n"), "utf8")),
+      canonical_rows: canonicalRecords.length,
+      provenance_rows: provenanceRecords.length,
     },
   };
+}
+
+// ---- Stage 14K.1 post-base reconciliations ---------------------------------
+// Operation kinds understood in the reconciliations CSV (see its header
+// comment for full semantics). Kept deliberately small: field updates,
+// provenance reassociation, and activation suppression.
+const RECONCILIATION_OPS = new Set(["update", "reassign_provenance", "suppress"]);
+const RECONCILIATION_UPDATE_COLUMNS = new Set([
+  ...REQUIRED_CANONICAL_COLUMNS,
+  // The read model's activation column. The source CSV has no such column
+  // (every seeded row starts as 'candidate'), so reconciliations may set it,
+  // and loadEffectiveCanonicalDataset materialises it on every row.
+  "record_status",
+]);
+// The schema's approved canonical_locations.record_status values (0003 DDL).
+const CANONICAL_RECORD_STATUS_DOMAIN = new Set([
+  "candidate",
+  "community-submitted",
+  "verified",
+  "disputed",
+  "outdated",
+  "rejected",
+]);
+// The internal marker for a row a reconciliation suppressed from the ACTIVE
+// catalogue. Generators filter on it exactly the way /api/restrooms filters
+// record_status <> 'rejected'; it never leaves the generator layer. A row an
+// update op already marked with the schema value 'rejected' keeps that value.
+export const SUPPRESSED_RECORD_STATUS = "suppressed";
+
+export function loadCanonicalReconciliations({ reconciliationsPath = RECONCILIATIONS_CSV } = {}) {
+  if (!existsSync(reconciliationsPath)) return [];
+  const text = readFileSync(reconciliationsPath).toString("utf8").replaceAll("\r\n", "\n");
+  const { records } = parseCsvRecords(text);
+  return records.sort((a, b) => Number(a.Sequence) - Number(b.Sequence));
+}
+
+// Validates and applies the ordered reconciliation operations to a copy of
+// the raw CSV dataset, producing the EFFECTIVE current canonical dataset.
+// Replay-safe: pure function over (raw dataset, ops); same inputs always
+// produce byte-identical output. Fails loudly on any unknown column, missing
+// target, or suppressed-twice operation, so a bad ops file can never silently
+// alter the catalogue. The raw dataset itself is never mutated.
+export function applyCanonicalReconciliations(dataset, ops = loadCanonicalReconciliations()) {
+  const errors = [];
+  const canonical = dataset.canonical.map((row) => ({ ...row, record_status: "candidate" }));
+  const provenance = dataset.provenance.map((row) => ({ ...row }));
+  const byId = new Map(canonical.map((row) => [row.Canonical_Location_ID, row]));
+  const seenSequences = new Set();
+
+  for (const [index, op] of ops.entries()) {
+    const where = `reconciliation op ${op.Sequence ?? `#${index + 1}`}`;
+    const sequence = Number(op.Sequence);
+    if (!Number.isInteger(sequence) || sequence < 1) {
+      errors.push(`${where}: Sequence must be a positive integer`);
+      continue;
+    }
+    if (seenSequences.has(sequence)) {
+      errors.push(`${where}: duplicate Sequence ${sequence}`);
+      continue;
+    }
+    seenSequences.add(sequence);
+    if (!RECONCILIATION_OPS.has(op.Operation)) {
+      errors.push(`${where}: unknown Operation '${op.Operation}'`);
+      continue;
+    }
+
+    if (op.Operation === "update") {
+      const target = byId.get(op.Target_Canonical_ID);
+      if (!target) {
+        errors.push(`${where}: update target ${op.Target_Canonical_ID} is not a canonical row`);
+        continue;
+      }
+      let changes;
+      try {
+        changes = JSON.parse(op.Fields_JSON);
+      } catch {
+        errors.push(`${where}: Fields_JSON is not valid JSON`);
+        continue;
+      }
+      if (changes === null || typeof changes !== "object" || Array.isArray(changes)) {
+        errors.push(`${where}: Fields_JSON must be a JSON object`);
+        continue;
+      }
+      let parsed;
+      try {
+        parsed = validateReconciliationFields(changes, where, errors);
+      } catch {
+        continue;
+      }
+      Object.assign(target, parsed);
+    } else if (op.Operation === "reassign_provenance") {
+      if (!byId.has(op.Target_Canonical_ID) || !byId.has(op.Move_To_Canonical_ID)) {
+        errors.push(`${where}: reassignment references an unknown canonical id (${op.Target_Canonical_ID} -> ${op.Move_To_Canonical_ID})`);
+        continue;
+      }
+      const row = provenance.find(
+        (p) => p.Canonical_Location_ID === op.Target_Canonical_ID && p.Source_Link_ID === op.Source_Link_ID,
+      );
+      if (!row) {
+        errors.push(`${where}: provenance link ${op.Target_Canonical_ID}|${op.Source_Link_ID} does not exist`);
+        continue;
+      }
+      const collides = provenance.some(
+        (p) => p !== row && p.Canonical_Location_ID === op.Move_To_Canonical_ID && p.Source_Link_ID === op.Source_Link_ID,
+      );
+      if (collides) {
+        errors.push(`${where}: ${op.Move_To_Canonical_ID}|${op.Source_Link_ID} already exists (primary key collision)`);
+        continue;
+      }
+      row.Canonical_Location_ID = op.Move_To_Canonical_ID;
+    } else if (op.Operation === "suppress") {
+      const target = byId.get(op.Target_Canonical_ID);
+      if (!target) {
+        errors.push(`${where}: suppress target ${op.Target_Canonical_ID} is not a canonical row`);
+        continue;
+      }
+      if (target.record_status === SUPPRESSED_RECORD_STATUS) {
+        errors.push(`${where}: ${op.Target_Canonical_ID} is suppressed twice`);
+        continue;
+      }
+      // The row stays in the physical dataset (lineage), exactly like the D1
+      // convention of marking duplicates 'rejected' instead of deleting them.
+      // If an earlier update op already recorded the schema-level 'rejected'
+      // status, keep that reviewable value; the activation filter treats both
+      // 'rejected' and the internal marker as inactive.
+      if (target.record_status === "candidate") {
+        target.record_status = SUPPRESSED_RECORD_STATUS;
+      }
+    }
+  }
+
+  if (errors.length) {
+    throw new Error(`Canonical reconciliation validation failed:\n${errors.join("\n")}`);
+  }
+  return { canonical, provenance };
+}
+
+function validateReconciliationFields(changes, where, errors) {
+  const parsed = {};
+  for (const [column, value] of Object.entries(changes)) {
+    if (!RECONCILIATION_UPDATE_COLUMNS.has(column)) {
+      errors.push(`${where}: update of unknown column '${column}'`);
+      continue;
+    }
+    if (column === "Canonical_Location_ID") {
+      errors.push(`${where}: Canonical_Location_ID is immutable`);
+      continue;
+    }
+    if (column === "record_status" && value !== "rejected") {
+      errors.push(`${where}: reconciliation ops may only set record_status='rejected' (activation suppression belongs to the suppress op)`);
+      continue;
+    }
+    if (column === "record_status") {
+      parsed[column] = CANONICAL_RECORD_STATUS_DOMAIN.has(value) ? value : undefined;
+      if (parsed[column] === undefined) {
+        errors.push(`${where}: record_status '${value}' is outside the schema domain`);
+      }
+      continue;
+    }
+    if (value !== "" && value !== null && typeof value !== "number" && typeof value !== "string") {
+      errors.push(`${where}: field ${column} must be a string, number, or null`);
+      continue;
+    }
+    parsed[column] = value === null ? "" : value;
+  }
+  return parsed;
+}
+
+// The effective dataset with the read model's activation rule applied: ids a
+// reconciliation suppressed are dropped from the ACTIVE catalogue, mirroring
+// `WHERE record_status <> 'rejected'` in functions/api/restrooms.ts. This is
+// NOT a global rejected-row filter over arbitrary data — suppression can only
+// ever come from an explicit, reviewed reconciliation operation.
+export function selectActiveCanonicalRows(effective) {
+  return effective.canonical.filter(
+    (row) => row.record_status !== SUPPRESSED_RECORD_STATUS && row.record_status !== "rejected",
+  );
 }
 
 function isIsoTimestamp(value) {
@@ -230,6 +423,14 @@ export function validateDataset({ canonical, provenance }) {
   const bidetSourceOwners = new Map();
   const osmRefs = new Map();
   let verifiedBidetCount = 0;
+  // Stage 14K.1: a reconciliation may retire a duplicate as lineage. Such a
+  // row legitimately ends with zero sources (its provenance moved to the
+  // survivor) and no evidentiary claims, so the source-accounting and
+  // survey-coupling rules below skip records a reconciliation marked
+  // inactive. Every other invariant (id format, pair uniqueness, orphans,
+  // domains) still applies to them.
+  const isInactiveLineage = (row) =>
+    row.record_status === "rejected" || row.record_status === SUPPRESSED_RECORD_STATUS;
 
   for (const [index, row] of canonical.entries()) {
     const where = `canonical row ${index + 1} (${row.Canonical_Location_ID})`;
@@ -288,8 +489,8 @@ export function validateDataset({ canonical, provenance }) {
     }
 
     const sourceCount = Number(row.Source_Count);
-    if (!Number.isInteger(sourceCount) || sourceCount < 1) {
-      errors.push(`${where}: Source_Count must be a positive integer`);
+    if (!Number.isInteger(sourceCount) || sourceCount < (isInactiveLineage(row) ? 0 : 1)) {
+      errors.push(`${where}: Source_Count must be a ${isInactiveLineage(row) ? "non-negative" : "positive"} integer`);
     }
 
     // Surveyed identity rules: the field survey is authoritative.
@@ -373,6 +574,7 @@ export function validateDataset({ canonical, provenance }) {
   }
 
   for (const row of canonical) {
+    if (isInactiveLineage(row)) continue;
     const actual = provenanceCountByLocation.get(row.Canonical_Location_ID) ?? 0;
     if (actual !== Number(row.Source_Count)) {
       errors.push(`canonical ${row.Canonical_Location_ID}: Source_Count=${row.Source_Count} but provenance has ${actual} rows`);
@@ -1020,6 +1222,11 @@ if (isEntry && (mode === "--validate" || mode === "--write" || mode === "--check
 
   if (mode === "--validate") {
     assertMigrationsAreWranglerSafe(filesToSafetyCheck);
+    // Stage 14K.1: also prove the post-base reconciliation ops are valid and
+    // that the effective dataset they produce keeps every CSV invariant.
+    const reconciliationOps = loadCanonicalReconciliations();
+    const effective = applyCanonicalReconciliations(dataset, reconciliationOps);
+    const effectiveStats = validateDataset(effective);
     console.log(
       JSON.stringify(
         {
@@ -1031,6 +1238,18 @@ if (isEntry && (mode === "--validate" || mode === "--write" || mode === "--check
           additions_provenance_rows: provenanceAdditions.length,
           base_files: baseExists ? null : (baseSeedFiles ?? []).map(({ file }) => file),
           addition_files: additionFiles.map(({ file }) => file),
+          reconciliations: {
+            ops: reconciliationOps.length,
+            inactive_ids: effective.canonical
+              .filter(
+                (row) =>
+                  row.record_status === SUPPRESSED_RECORD_STATUS ||
+                  row.record_status === "rejected",
+              )
+              .map((row) => row.Canonical_Location_ID),
+            active_canonical_rows: selectActiveCanonicalRows(effective).length,
+            effective_invariants: effectiveStats,
+          },
         },
         null,
         2,
