@@ -5,7 +5,7 @@
 // out -> 401, oversized body -> 413, malformed JSON -> 400. Handlers stay thin
 // and only contain routing + delegation to the store.
 
-import { resolveIdentity, type AuthEnv } from "./identity.ts";
+import { resolveIdentity, resolvePromoterAllowList, type AuthEnv } from "./identity.ts";
 import type { D1Database } from "./contributions-store.ts";
 import { MAX_BODY_BYTES } from "../../lib/contributions/contract.ts";
 import type { Identity } from "../../lib/contributions/authorize.ts";
@@ -63,6 +63,31 @@ export async function requireModerator(ctx: ApiContext): Promise<Gate> {
   return gate;
 }
 
+// The promotion endpoint fails closed with 503 whenever the promoter capability
+// is not wired (absent) or misconfigured (wildcard). This is distinct from a
+// 403 "you are signed in but not a promoter": here the feature itself is off.
+function promotionUnavailable(status: "unconfigured" | "malformed"): Response {
+  return status === "malformed"
+    ? json({ error: "promotion is unavailable: promoter configuration is invalid", code: "promoter_config_malformed" }, 503)
+    : json({ error: "promotion is not open yet: promoter allow-list is not configured", code: "promoter_config_unconfigured" }, 503);
+}
+
+export type PromoterGate =
+  | { identity: Identity; promoterIds: string[] }
+  | { response: Response };
+
+// Identity first (503 db / 503 auth / 401), then the server-side promoter
+// allow-list. Membership itself is decided by `authorizeCanonicalPromotion` in
+// the store so the pure predicate stays the single source of the trust rules;
+// this seam only resolves the config and hands the verified identity + ids on.
+export async function requirePromoter(ctx: ApiContext): Promise<PromoterGate> {
+  const gate = await requireIdentity(ctx);
+  if ("response" in gate) return gate;
+  const allow = resolvePromoterAllowList(ctx.env);
+  if (allow.status !== "ok") return { response: promotionUnavailable(allow.status) };
+  return { identity: gate.identity, promoterIds: allow.ids };
+}
+
 export async function readJsonBody(
   request: Request,
 ): Promise<{ value: Record<string, unknown> } | { response: Response }> {
@@ -72,6 +97,31 @@ export async function readJsonBody(
   }
   if (buffer.byteLength === 0) {
     return { response: json({ error: "body required" }, 400) };
+  }
+  try {
+    const parsed = JSON.parse(new TextDecoder().decode(buffer));
+    if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return { response: json({ error: "body must be a JSON object" }, 400) };
+    }
+    return { value: parsed as Record<string, unknown> };
+  } catch {
+    return { response: json({ error: "invalid JSON" }, 400) };
+  }
+}
+
+// Like `readJsonBody` but where an EMPTY body is legitimate (the frozen Stage
+// 14A contract §15 makes the promotion body "empty / ignored"). Returns
+// `{ value: null }` for no body, a parsed object otherwise, and the same 400 /
+// 413 refusals for a malformed or oversized payload.
+export async function readOptionalJsonBody(
+  request: Request,
+): Promise<{ value: Record<string, unknown> | null } | { response: Response }> {
+  const buffer = await request.arrayBuffer();
+  if (buffer.byteLength > MAX_BODY_BYTES) {
+    return { response: json({ error: "payload too large" }, 413) };
+  }
+  if (buffer.byteLength === 0) {
+    return { value: null };
   }
   try {
     const parsed = JSON.parse(new TextDecoder().decode(buffer));

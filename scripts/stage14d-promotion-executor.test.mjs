@@ -873,7 +873,7 @@ const COORD_EVIDENCE = [{ type: "field_observation", detail: "verified the reloc
     ["executeCanonicalPromotion", "planAndExecuteCanonicalPromotion", "reconcileCanonicalPromotions"],
     "the executor exposes exactly its narrow API",
   );
-  // No promotion endpoint exists anywhere under functions/api.
+  // Enumerate every file under functions/api for the endpoint-scope guard below.
   const walk = (dir, seen = []) => {
     for (const entry of readdirSync(dir, { withFileTypes: true })) {
       const p = `${dir}/${entry.name}`;
@@ -883,7 +883,16 @@ const COORD_EVIDENCE = [{ type: "field_observation", detail: "verified the reloc
     return seen;
   };
   const apiFiles = walk(new URL("../functions/api", import.meta.url).pathname.replace(/^\//, ""));
-  assert.ok(!apiFiles.some((f) => /promotion/i.test(f)), "no Stage 14D HTTP endpoint file exists");
+  // Stage 14D asserted no promotion endpoint existed. Stage 14E legitimately
+  // adds exactly ONE thin HTTP boundary; the durable invariant is that the
+  // EXECUTOR above still contains none of that surface (§4/§15 guards) and the
+  // endpoint is a separate, dedicated route. Pin it to the single 14E file
+  // rather than forbidding its existence.
+  assert.deepEqual(
+    apiFiles.filter((f) => /promotion/i.test(f)).map((f) => f.split(/[\\/]/).pop()).sort(),
+    ["promotion.ts"],
+    "the only promotion endpoint is the single Stage 14E boundary route (executor stays HTTP-free)",
+  );
   // No DELETE / INSERT into canonical / provenance writes in the executor.
   // Strip block comments and line comments so guards scan executable code only.
   const executableSource = source
