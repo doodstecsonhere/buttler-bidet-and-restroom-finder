@@ -15,6 +15,7 @@
     "test:stage13-identity": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/stage13-identity.test.mjs",
     "test:stage13-frontend": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/stage13-frontend-auth.test.mjs",
     "test:stage13-contrib-ui": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/stage13-contribution-ui.test.mjs",
+    "test:stage14c-planner": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/stage14c-promotion-planner.test.mjs",
     "import:canonical:validate": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/import-canonical.mjs --validate",
     "import:canonical:write": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/import-canonical.mjs --write",
     "import:canonical:check": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/import-canonical.mjs --check",
