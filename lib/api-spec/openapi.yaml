@@ -42,7 +42,7 @@ paths:
       tags: [restrooms]
       summary: Get all restroom locations
       description: >-
-        Returns the canonical public catalogue (776 owner-approved locations,
+        Returns the canonical public catalogue (777 owner-approved locations,
         including unverified discovery candidates). Read-only: non-GET methods
         return 405.
       responses:

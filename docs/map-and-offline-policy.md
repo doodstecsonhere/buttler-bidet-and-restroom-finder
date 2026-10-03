@@ -22,7 +22,7 @@ Once the PWA has been loaded, the application shell and the restroom catalogue
 remain available without a network connection. Since BUTTLER 2.0 Stage 5B the
 offline catalogue is canonical, never a second dataset: the loader prefers the
 live API, then the last-known-good canonical API response saved on the device,
-then a generated snapshot of the 776-location canonical dataset
+then a generated snapshot of the 777-location canonical dataset
 (`lib/restroom-bundle.ts`, produced by
 `scripts/generate-bundled-catalogue.mjs`). The superseded legacy 1,112-row
 bundle is no longer served to users. Search, filters, markers, popups, and map

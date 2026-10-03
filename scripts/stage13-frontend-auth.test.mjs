@@ -409,7 +409,7 @@ function authed(rec) {
   });
   assert.equal(offline.source, "bundled");
   assert.equal(offline.failure, "offline");
-  assert.equal(offline.data.length, 776);
+  assert.equal(offline.data.length, 777);
 }
 
 const read = (relative) => readFile(new URL(relative, import.meta.url), "utf8");

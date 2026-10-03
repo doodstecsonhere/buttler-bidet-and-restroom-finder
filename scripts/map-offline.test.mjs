@@ -34,7 +34,7 @@ const offline = await loadRestrooms(async () => {
 });
 assert.equal(offline.source, "bundled");
 assert.equal(offline.failure, "offline");
-assert.equal(offline.data.length, 776);
+assert.equal(offline.data.length, 777);
 assert.equal(offline.data, BUNDLED_RESTROOMS);
 
 // A server-side HTTP error must never be mislabelled as the user being
@@ -59,7 +59,7 @@ assert.equal(
   BUNDLED_RESTROOMS.filter(
     (record) => record.bidet && record.bidet_evidence === "field_verified",
   ).length,
-  98,
+  99,
 );
 
 console.log("MAP_OFFLINE_TEST_SUCCESS");

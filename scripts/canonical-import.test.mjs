@@ -7,10 +7,12 @@ import {
   EXPECTED_VERIFIED_BIDET_COUNT,
   PROTECTED_DISTINCT_ENTITIES,
   assertMigrationsAreWranglerSafe,
+  generateAdditionsSql,
   generateCanonicalDdlSql,
-  generateCanonicalSeedSql,
   listCanonicalMigrationFiles,
+  listCommittedSeedCanonicalIds,
   loadCanonicalDataset,
+  splitBaseAndAdditions,
   validateDataset,
 } from "./import-canonical.mjs";
 
@@ -19,22 +21,40 @@ const migrationsDirPath = fileURLToPath(migrationsDir);
 const ddlPath = new URL("0003_create_canonical_read_model.sql", migrationsDir);
 const normalize = (value) => value.replaceAll("\r\n", "\n");
 
-// 1. The checked-in migrations match the generator and the source CSVs. The
-//    seed is generated as an ordered set of Wrangler-safe chunk files.
+// 1. Frozen-base model (Stage 14G): migrations 0001-0006, including every
+//    0004_* seed chunk, are applied production history and are never
+//    regenerated from the CSV. Genuinely new canonical rows arrive in forward
+//    0007_* additions migrations, and the checked-in addition files must match
+//    what the generator would produce from the CSV rows absent from the base.
 const dataset = loadCanonicalDataset();
 const stats = validateDataset(dataset);
-const generatedSeed = generateCanonicalSeedSql(
-  dataset.canonical,
-  dataset.provenance,
-  dataset.fingerprints,
-);
-const seedFileNames = generatedSeed.map(({ file }) => file);
+const baseIds = listCommittedSeedCanonicalIds(migrationsDirPath);
 
 const onDiskSeed = readdirSync(migrationsDirPath)
   .filter((name) => /^0004_seed_canonical_locations.*\.sql$/.test(name))
   .sort();
-assert.deepEqual(onDiskSeed, [...seedFileNames].sort());
-for (const { file, sql } of generatedSeed) {
+assert.ok(onDiskSeed.length > 0, "frozen 0004_* seed chunks must stay committed");
+assert.equal(baseIds.size, 776, "the frozen base holds the 776 cutover rows");
+
+const { canonicalAdditions, provenanceAdditions } = splitBaseAndAdditions(
+  dataset.canonical,
+  dataset.provenance,
+  baseIds,
+);
+assert.equal(canonicalAdditions.length, 1, "exactly one new canonical row");
+assert.equal(provenanceAdditions.length, 2, "exactly two new provenance rows");
+
+const generatedAdditions = generateAdditionsSql(
+  canonicalAdditions,
+  provenanceAdditions,
+  dataset.fingerprints,
+);
+const additionFileNames = generatedAdditions.map(({ file }) => file);
+const onDiskAdditions = readdirSync(migrationsDirPath)
+  .filter((name) => /^0007_seed_canonical_locations_added.*\.sql$/.test(name))
+  .sort();
+assert.deepEqual(onDiskAdditions, [...additionFileNames].sort());
+for (const { file, sql } of generatedAdditions) {
   assert.equal(
     normalize(readFileSync(new URL(file, migrationsDir), "utf8")),
     normalize(sql),
@@ -44,21 +64,24 @@ for (const { file, sql } of generatedSeed) {
 assert.equal(normalize(readFileSync(ddlPath, "utf8")), normalize(generateCanonicalDdlSql()));
 // The generator's own Wrangler-splitter guard must pass on the checked-in files.
 assertMigrationsAreWranglerSafe(
-  seedFileNames.map((file) => ({ file, sql: readFileSync(new URL(file, migrationsDir), "utf8") })),
+  [...onDiskSeed, ...onDiskAdditions].map((file) => ({
+    file,
+    sql: readFileSync(new URL(file, migrationsDir), "utf8"),
+  })),
 );
-assert.deepEqual(listCanonicalMigrationFiles(generatedSeed), [
+assert.deepEqual(listCanonicalMigrationFiles(generatedAdditions), [
   "0003_create_canonical_read_model.sql",
-  ...seedFileNames,
+  ...additionFileNames,
 ]);
 
 // 2. Dataset invariants from the reconciliation summary.
-assert.equal(stats.canonical_rows, 776);
-assert.equal(stats.provenance_rows, 845);
+assert.equal(stats.canonical_rows, 777);
+assert.equal(stats.provenance_rows, 847);
 assert.equal(stats.verified_bidet_records, EXPECTED_VERIFIED_BIDET_COUNT);
 
-// 3. Apply the schema and every seed chunk to an isolated in-memory database,
-//    in migration order (locations before provenance).
-const seedSqlChunks = seedFileNames.map((name) =>
+// 3. Apply the schema, the frozen 0004_* seed, and the 0007_* additions to an
+//    isolated in-memory database, in migration order (base before additions).
+const seedSqlChunks = [...onDiskSeed, ...onDiskAdditions].map((name) =>
   readFileSync(new URL(name, migrationsDir), "utf8"),
 );
 const database = new DatabaseSync(":memory:");
@@ -69,10 +92,47 @@ for (const sql of seedSqlChunks) database.exec(sql);
 const countIn = (table) =>
   database.prepare(`SELECT count(*) AS n FROM ${table}`).get().n;
 
-assert.equal(countIn("canonical_locations"), 776);
-assert.equal(countIn("location_provenance"), 845);
+assert.equal(countIn("canonical_locations"), 777);
+assert.equal(countIn("location_provenance"), 847);
 
-// 4. All 98 verified bidet records exist exactly once, with Yes/Yes and
+// 3b. The Stage 14G addition is exactly the DICT canonical row: the OSM link
+//     stays candidate_unverified location evidence, and the field survey is
+//     the evidence for restroom and bidet presence. Access and fee stay
+//     unknown, and the nearby "Unnamed public toilet" remains a distinct row.
+const dictAddition = database
+  .prepare("SELECT * FROM canonical_locations WHERE canonical_id = ?")
+  .get(canonicalAdditions[0].Canonical_Location_ID);
+assert.equal(dictAddition.name, "Department of Information and Communications Technology");
+assert.equal(dictAddition.latitude, 9.3063328);
+assert.equal(dictAddition.longitude, 123.3088646);
+assert.equal(dictAddition.bidet_presence, "Yes");
+assert.equal(dictAddition.restroom_presence, "Yes");
+assert.equal(dictAddition.bidet_verification, "field_verified");
+assert.equal(dictAddition.restroom_verification, "field_verified_via_bidet_survey");
+assert.equal(dictAddition.access, "unknown");
+assert.equal(dictAddition.fee, "unknown");
+assert.equal(dictAddition.source_count, 2);
+assert.deepEqual(
+  database
+    .prepare(
+      `SELECT source_type, evidence_role, verification FROM location_provenance
+       WHERE canonical_id = ? ORDER BY source_link_id`,
+    )
+    .all(canonicalAdditions[0].Canonical_Location_ID)
+    .map((row) => `${row.source_type}|${row.evidence_role}|${row.verification}`),
+  [
+    "field_survey_bidet_workbook|verified_bidet_and_restroom_presence|field_verified",
+    "OSM|restroom_acquisition|candidate_unverified",
+  ],
+);
+const nearbyToilet = database
+  .prepare("SELECT * FROM canonical_locations WHERE canonical_id = ?")
+  .get("buttler_loc_033ceffc59024f655af3");
+assert.equal(nearbyToilet.name, "Unnamed public toilet");
+assert.equal(nearbyToilet.bidet_presence, "Yes");
+assert.equal(nearbyToilet.bidet_verification, "osm_explicit");
+
+// 4. All 99 verified bidet records exist exactly once, with Yes/Yes and
 //    field verification, and keep their surveyed names and coordinates.
 const surveyStats = database
   .prepare(
@@ -86,10 +146,10 @@ const surveyStats = database
   )
   .get();
 assert.deepEqual({ ...surveyStats }, {
-  rows: 98,
-  bidet_yes: 98,
-  restroom_yes: 98,
-  field_verified: 98,
+  rows: 99,
+  bidet_yes: 99,
+  restroom_yes: 99,
+  field_verified: 99,
 });
 assert.equal(
   database
@@ -124,7 +184,7 @@ assert.equal(
        WHERE source_type = 'field_survey_bidet_workbook'`,
     )
     .get().n,
-  98,
+  99,
 );
 assert.equal(
   database
@@ -171,8 +231,8 @@ assert.equal(
 // 8. Import is idempotent: rerunning preserves counts, and a reviewed
 //    record_status upgrade survives a re-import while field data refreshes.
 for (const sql of seedSqlChunks) database.exec(sql);
-assert.equal(countIn("canonical_locations"), 776);
-assert.equal(countIn("location_provenance"), 845);
+assert.equal(countIn("canonical_locations"), 777);
+assert.equal(countIn("location_provenance"), 847);
 
 const target = dataset.canonical.find((row) => !row.Bidet_Source_ID);
 database
@@ -230,7 +290,29 @@ assert.throws(
   /constraint failed/i,
 );
 
-// 10. Survey identity cannot be downgraded inside the read model.
+// 11. The documented 0007 rollback removes exactly the added DICT rows and
+//     restores the frozen-base counts, on this disposable database only.
+const rollbackSql = readFileSync(
+  new URL("../d1/rollback/0007_delete_added_canonical_locations.sql", import.meta.url),
+  "utf8",
+);
+database.exec(rollbackSql);
+assert.equal(countIn("canonical_locations"), 776);
+assert.equal(countIn("location_provenance"), 845);
+assert.equal(
+  database
+    .prepare("SELECT count(*) AS n FROM canonical_locations WHERE canonical_id = ?")
+    .get(canonicalAdditions[0].Canonical_Location_ID).n,
+  0,
+);
+assert.equal(
+  database
+    .prepare("SELECT count(*) AS n FROM location_provenance WHERE canonical_id = ?")
+    .get(canonicalAdditions[0].Canonical_Location_ID).n,
+  0,
+);
+
+// 12. Survey identity cannot be downgraded inside the read model.
 const surveyRow = dataset.canonical.find((row) => row.Bidet_Source_ID);
 assert.throws(
   () =>

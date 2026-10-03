@@ -19,7 +19,13 @@ Since Stage 8/9 the canonical read model is the live source of truth:
 migration `0003` creates `canonical_locations` and `location_provenance`, and
 the `0004_*` seed migrations carry the owner-approved 776-location dataset
 imported from `attached_assets/buttler_locations_canonical.csv` by
-`scripts/import-canonical.mjs`. The bundled catalogue in
+`scripts/import-canonical.mjs`. Because the production migration ledger is
+keyed by file name, the applied `0001`–`0006` files (including every `0004_*`
+chunk) are frozen history that regeneration must never rewrite. Since
+Stage 14G a genuinely new canonical location instead arrives in forward
+`0007_*` additions migrations generated for the CSV rows absent from the
+frozen base (currently one addition: the DICT Dumaguete field-surveyed
+bidet location, taking the dataset to 777 locations). The bundled catalogue in
 `lib/restroom-data.ts` (mirrored by `0002`) is now only the seed source for the
 legacy table. Its rows remain marked `candidate` and `imported`: owning the
 source does not mean every facility claim has been recently verified. The seed
@@ -79,7 +85,10 @@ Before any further production use, D1 Time Travel or an export must be verified
 and the rollback tested on a disposable database. Migration `0001` can be
 reversed with `d1/rollback/0001_drop_restroom_locations.sql`, but dropping a
 populated table deletes its records and therefore requires a separate
-destructive approval.
+destructive approval. The Stage 14G `0007` addition is reversed with
+`d1/rollback/0007_delete_added_canonical_locations.sql`, which deletes only
+the added DICT provenance rows and canonical row (provenance before canonical
+for foreign-key order) and nothing else.
 
 Code-level rollback is a reversal commit merged through a reviewed pull
 request. The canonical data migration itself is re-deployable and idempotent,
