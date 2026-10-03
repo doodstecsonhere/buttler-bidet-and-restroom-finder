@@ -6,9 +6,9 @@ import { BUNDLED_RESTROOMS } from "./restroom-bundle.ts";
  * - "d1": the live canonical API response.
  * - "cache": the last-known-good canonical API response saved by this loader
  *   on a previous successful load (runtime cache, kept fresh per device).
- * - "bundled": the generated snapshot of the canonical 777-row dataset
- *   (lib/restroom-bundle.ts) — only used before any successful load, so the
- *   offline catalogue is the same dataset as the online one, never the
+ * - "bundled": the generated snapshot of the effective active canonical
+ *   dataset (lib/restroom-bundle.ts) — only used before any successful load,
+ *   so the offline catalogue is the same dataset as the online one, never the
  *   superseded legacy 1,112-row bundle.
  */
 export type RestroomSource = "d1" | "cache" | "bundled";

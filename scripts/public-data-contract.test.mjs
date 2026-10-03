@@ -1,10 +1,11 @@
-// Stage 5B — public data contract gate.
+// Stage 5B — public data contract gate (effective-catalogue model since Stage 14K.1).
 //
 // Proves the public projection (API shape), the generated offline bundle, and
-// the canonical D1 read model agree on exactly one catalogue: the 777-row
-// canonical dataset with its approved semantics. It never touches production:
-// everything runs against an isolated in-memory SQLite database seeded from
-// the committed migrations, the same way the other data tests run.
+// the canonical D1 read model agree on exactly one catalogue: the ACTIVE
+// effective canonical dataset — the 777-row seed with the recorded Stage 14K
+// Pulantubig reconciliation applied (776 active rows). It never touches
+// production: everything runs against an isolated in-memory SQLite database
+// seeded from the committed migrations, the same way the other data tests run.
 import assert from "node:assert/strict";
 import { readdirSync, readFileSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
@@ -15,15 +16,20 @@ import {
 } from "../functions/api/restrooms.ts";
 import { BUNDLED_RESTROOMS } from "../lib/restroom-bundle.ts";
 import { RESTROOMS as LEGACY_RESTROOMS } from "../lib/restroom-data.ts";
-import { loadCanonicalDataset } from "./import-canonical.mjs";
+import {
+  applyCanonicalReconciliations,
+  loadCanonicalDataset,
+} from "./import-canonical.mjs";
 
 const migrationsDir = new URL("../d1/migrations/", import.meta.url);
 const ddlPath = new URL("0003_create_canonical_read_model.sql", migrationsDir);
 // The seed arrives as an ordered set of Wrangler-safe chunk files (frozen
-// 0004_* base plus forward 0007_* additions); applying them in name order
-// keeps locations before their provenance links.
+// 0004_* base plus forward 0007_* additions), followed by the forward
+// reconciliation migrations (0008_*). Applying them in name order keeps
+// locations before their provenance links and mirrors the migration ledger
+// state production will hold once 0008 is approved and applied.
 const seedPaths = readdirSync(migrationsDir)
-  .filter((name) => /^000[47]_seed_canonical_locations.*\.sql$/.test(name))
+  .filter((name) => /^000[47]_seed_canonical_locations.*\.sql$/.test(name) || /^0008_/.test(name))
   .sort()
   .map((name) => new URL(name, migrationsDir));
 
@@ -37,10 +43,12 @@ const served = database
   .all()
   .map((row) => toPublicRestroom(row));
 
-// 1. The full canonical catalogue is public, including the 625 discovery
+// 1. The full ACTIVE canonical catalogue is public, including the discovery
 //    candidates whose restroom presence is Unknown. Nothing is filtered out
-//    merely for being uncertain.
-assert.equal(served.length, 777);
+//    merely for being uncertain — only a recorded reconciliation can retire a
+//    row (the 777 physical rows minus the Stage 14K rejected Pulantubig
+//    duplicate = 776 active).
+assert.equal(served.length, 776);
 
 // 2. Canonical string ids are served untouched; no numeric coercion.
 for (const record of served) {
@@ -67,10 +75,14 @@ for (const record of served.filter((record) => !record.bidet)) {
 }
 
 // 4. Fee information is preserved from the canonical source, never flattened
-//    into a lossy yes/no domain.
+//    into a lossy yes/no domain. Comparison runs against the EFFECTIVE
+//    post-reconciliation dataset (the same source the bundle generator uses),
+//    because the active rows may legitimately differ from the frozen CSV after
+//    a recorded reconciliation.
 const dataset = loadCanonicalDataset();
+const effective = applyCanonicalReconciliations(dataset);
 const feeBySourceId = new Map(
-  dataset.canonical.map((row) => [
+  effective.canonical.map((row) => [
     row.Canonical_Location_ID,
     { access: row.Access, fee: row.Fee },
   ]),

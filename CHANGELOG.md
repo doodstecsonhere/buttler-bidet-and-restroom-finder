@@ -16,6 +16,21 @@ All notable changes to Buttler are documented here.
   `d1/rollback/0007_delete_added_canonical_locations.sql`; the dataset grows to
   777 canonical / 847 provenance rows and 115 bidet-positive locations
   (preparation only: no production migration or deployment was performed).
+- Stage 14K.1: post-base canonical reconciliation layer. Owner decisions
+  that merge a canonical duplicate after the frozen seed are recorded as
+  ordered operations in
+  `attached_assets/buttler_canonical_reconciliations.csv` (update /
+  reassign\_provenance / suppress) and mirrored in production by the forward
+  D1 migration `0008_reconcile_pulantubig_canonical_duplicate.sql`. The
+  offline bundle is now generated from the EFFECTIVE active catalogue
+  (776 locations: the 777-row seed minus the reconciliation-retired
+  Pulantubig duplicate `buttler_loc_a962aa157dff936ae36a`; the survivor
+  `buttler_loc_a7db20b50c9993d58c0e` carries access=public and the
+  field-verified bidet/restroom state), so offline and the post-0008 live
+  API projection agree. Migrations `0001`–`0007` and the owner CSVs remain
+  byte-frozen; rejected lineage rows are retained in D1 for contribution
+  foreign keys and audit (preparation only: `0008` is not applied to
+  production).
 - The `/api/restrooms` public contract now derives a `bidet_evidence` field
   (`field_verified` / `osm_explicit` / `unknown`) from the canonical
   verification column: 98 survey-verified and 16 map-reported bidets

@@ -409,7 +409,9 @@ function authed(rec) {
   });
   assert.equal(offline.source, "bundled");
   assert.equal(offline.failure, "offline");
-  assert.equal(offline.data.length, 777);
+  // 776 active rows: seed 777 minus the Stage 14K reconciliation-retired
+  // Pulantubig duplicate (offline mirrors the live API filter).
+  assert.equal(offline.data.length, 776);
 }
 
 const read = (relative) => readFile(new URL(relative, import.meta.url), "utf8");

@@ -42,12 +42,15 @@
 --   the merge and the three corroborating contributions, and the duplicate row is
 --   MARKED (record_status='rejected') rather than deleted so the contributions
 --   that still reference it keep a valid foreign key and rollback stays exact.
---   LIMITATION: this reconciliation lives in the D1 read model only. The owner's
---   canonical CSV source is intentionally NOT edited here (dropping the
---   duplicate id would violate the frozen 0004 base guard, and zeroing a base
---   row's provenance would break the Source_Count/provenance invariants in
---   import-canonical.mjs). Fold the merge into the CSV at the next scheduled
---   owner re-import so the offline bundle snapshot catches up.
+--   LIMITATION (resolved at Stage 14K.1): this reconciliation used to live in
+--   the D1 read model only while the offline bundle still shipped the raw CSV
+--   snapshot. The same operations are now also recorded in reviewable source
+--   form in attached_assets/buttler_canonical_reconciliations.csv, and
+--   scripts/generate-bundled-catalogue.mjs generates the offline bundle from
+--   the EFFECTIVE active catalogue, so offline and the post-0008 online
+--   projection agree (see d1/README.md, "Post-base canonical
+--   reconciliations"). The owner's frozen CSV rows remain unedited and the
+--   0004/0007 seeds remain frozen.
 --
 -- CONSTRAINT HANDLING (no schema is weakened)
 --   idx_canonical_locations_bidet_source is UNIQUE WHERE bidet_source_id IS NOT
