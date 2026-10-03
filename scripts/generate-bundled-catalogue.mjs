@@ -50,7 +50,7 @@ export function generateBundledCatalogue(canonical) {
     "import type { Restroom } from \"./restroom-data.ts\";",
     "",
     "// Offline fallback catalogue: the public projection of the canonical",
-    "// 776-location dataset. Discovery candidates with unknown restroom or",
+    "// 777-location dataset. Discovery candidates with unknown restroom or",
     "// bidet presence are intentionally included; unknown is never coerced.",
     "export const BUNDLED_RESTROOMS: Restroom[] = [",
     `${body},`,

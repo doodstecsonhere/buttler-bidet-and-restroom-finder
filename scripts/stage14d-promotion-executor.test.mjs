@@ -1,9 +1,9 @@
 // Buttler 2.0 — Stage 14D transactional canonical-promotion executor test.
 //
 // Harness parity with Stage 13/14C (contract §17): the real committed
-// migrations 0001–0006 (including the promotion ledger) are applied to a
+// migrations 0001–0007 (including the promotion ledger) are applied to a
 // throwaway in-memory SQLite — the D1 engine — seeded with the real local
-// dataset (776 canonical / 845 provenance / 1,112 legacy). It NEVER touches a
+// dataset (777 canonical / 847 provenance / 1,112 legacy). It NEVER touches a
 // bound database, a Cloudflare account, or any secret. Every contribution and
 // canonical mutation here is a disposable local test record.
 //
@@ -110,8 +110,8 @@ const count = (sql, ...args) =>
 const baselineCanonical = count("SELECT count(*) AS c FROM canonical_locations");
 const baselineProvenance = count("SELECT count(*) AS c FROM location_provenance");
 const baselineLegacy = count("SELECT count(*) AS c FROM restroom_locations");
-assert.equal(baselineCanonical, 776);
-assert.equal(baselineProvenance, 845);
+assert.equal(baselineCanonical, 777);
+assert.equal(baselineProvenance, 847);
 assert.equal(baselineLegacy, 1112);
 
 const canonicalBaseline = new Map(
@@ -460,7 +460,7 @@ const COORD_EVIDENCE = [{ type: "field_observation", detail: "verified the reloc
   // Yes -> Unknown on a SURVEYED row (bidet_source_id non-null) rejected with
   // the explanatory conflict, and the DB CHECK independently refuses.
   const surveyed = sqlite.prepare("SELECT canonical_id AS id FROM canonical_locations WHERE bidet_source_id IS NOT NULL LIMIT 1").get();
-  assert.ok(surveyed, "fixture needs one surveyed row (98 exist locally)");
+  assert.ok(surveyed, "fixture needs one surveyed row (99 exist locally)");
   touchedIds.add(surveyed.id);
   const c3 = insertContribution({ kind: "bidet_report", target: surveyed.id, payload: { bidet_presence: "Unknown" } });
   const r3 = failWith(await planAndExecuteCanonicalPromotion(db, { contributionId: c3, promoterUserId: PROMOTER }));

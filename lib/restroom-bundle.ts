@@ -5,7 +5,7 @@
 import type { Restroom } from "./restroom-data.ts";
 
 // Offline fallback catalogue: the public projection of the canonical
-// 776-location dataset. Discovery candidates with unknown restroom or
+// 777-location dataset. Discovery candidates with unknown restroom or
 // bidet presence are intentionally included; unknown is never coerced.
 export const BUNDLED_RESTROOMS: Restroom[] = [
   {"id":"buttler_loc_0032fe6b84ae05ac2378","name":"Don Roberto's Bar & Restaurant","latitude":9.3101195,"longitude":123.3076516,"address":null,"access":"unknown","fee":"unknown","bidet":false,"bidet_evidence":"unknown"},
@@ -701,6 +701,7 @@ export const BUNDLED_RESTROOMS: Restroom[] = [
   {"id":"buttler_loc_e2543e46b7a0a5ed1a70","name":"7-Eleven","latitude":9.2994333,"longitude":123.3038799,"address":"Governor Perdices Street, Dumaguete","access":"unknown","fee":"unknown","bidet":false,"bidet_evidence":"unknown"},
   {"id":"buttler_loc_e28a6a9014d76557249b","name":"Unnamed public toilet","latitude":9.3052662,"longitude":123.299752,"address":null,"access":"customers","fee":"unknown","bidet":false,"bidet_evidence":"unknown"},
   {"id":"buttler_loc_e40a9822c8c378aabd2e","name":"Rago's Fastfood","latitude":9.3014964,"longitude":123.2992425,"address":null,"access":"unknown","fee":"unknown","bidet":false,"bidet_evidence":"unknown"},
+  {"id":"buttler_loc_e43982e95335d647d95c","name":"Department of Information and Communications Technology","latitude":9.3063328,"longitude":123.3088646,"address":"Bishop Epifanio B. Surban Street, Poblacion 3, Dumaguete City","access":"unknown","fee":"unknown","bidet":true,"bidet_evidence":"field_verified"},
   {"id":"buttler_loc_e44f12955a31d703f8f1","name":"Hapit Anay Store","latitude":9.3208284,"longitude":123.3070041,"address":null,"access":"unknown","fee":"unknown","bidet":false,"bidet_evidence":"unknown"},
   {"id":"buttler_loc_e4f9710fbbdc020f975e","name":"Hyde","latitude":9.3233349,"longitude":123.3116404,"address":"Flores Avenue Extension, Dumaguete","access":"unknown","fee":"unknown","bidet":false,"bidet_evidence":"unknown"},
   {"id":"buttler_loc_e4f9cbe98ceb9a84ec21","name":"DaYo Seafood","latitude":9.3097191,"longitude":123.3089464,"address":"San Juan Street","access":"unknown","fee":"unknown","bidet":false,"bidet_evidence":"unknown"},

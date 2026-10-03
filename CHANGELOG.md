@@ -6,6 +6,16 @@ All notable changes to Buttler are documented here.
 
 ### Added
 
+- Stage 14G: one genuinely new canonical location — the Department of
+  Information and Communications Technology (DICT), Dumaguete — from the
+  owner's firsthand 2026-10-01 field survey (restroom and bidet present,
+  `field_verified`; location evidence from OSM node/12566526394, which itself
+  claims no restroom or bidet and stays `candidate_unverified`). The addition
+  ships as the new forward migration `0007_seed_canonical_locations_added_01.sql`
+  (the applied `0001`–`0006` files are frozen history) with the matching
+  `d1/rollback/0007_delete_added_canonical_locations.sql`; the dataset grows to
+  777 canonical / 847 provenance rows and 115 bidet-positive locations
+  (preparation only: no production migration or deployment was performed).
 - The `/api/restrooms` public contract now derives a `bidet_evidence` field
   (`field_verified` / `osm_explicit` / `unknown`) from the canonical
   verification column: 98 survey-verified and 16 map-reported bidets

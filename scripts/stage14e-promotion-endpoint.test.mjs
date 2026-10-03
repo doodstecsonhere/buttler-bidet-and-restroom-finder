@@ -9,7 +9,7 @@
 // JWKS stands in for Auth0), so identity comes only from a signed bearer token
 // — never a header/body/query field.
 //
-// It applies the committed migrations 0001–0006 to a fresh in-memory SQLite and
+// It applies the committed migrations 0001–0007 to a fresh in-memory SQLite and
 // validates the canonical_promotions ledger schema there (mission Phase 7). It
 // NEVER touches a bound database, a Cloudflare account, or any secret, and runs
 // zero production writes.
@@ -126,8 +126,8 @@ sqlite.exec("DELETE FROM canonical_promotions");
 // Baselines + fixtures
 // ---------------------------------------------------------------------------
 const count = (sql, ...a) => (a.length ? sqlite.prepare(sql).get(...a) : sqlite.prepare(sql).get()).c;
-assert.equal(count("SELECT count(*) AS c FROM canonical_locations"), 776);
-assert.equal(count("SELECT count(*) AS c FROM location_provenance"), 845);
+assert.equal(count("SELECT count(*) AS c FROM canonical_locations"), 777);
+assert.equal(count("SELECT count(*) AS c FROM location_provenance"), 847);
 assert.equal(count("SELECT count(*) AS c FROM restroom_locations"), 1112);
 
 const provenanceBaseline = JSON.stringify(

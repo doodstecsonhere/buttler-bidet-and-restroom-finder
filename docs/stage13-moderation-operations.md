@@ -67,7 +67,7 @@ is the seam that the chosen provider plugs into.
 | Data access | `functions/_lib/contributions-store.ts` | Parameterised D1 reads/writes for `contributions`/`contribution_events` only. Pending caps, duplicate detection, forced `pending` status, server-set identity/timestamps, append-only events. |
 | HTTP surface | `functions/api/contributions.ts`, `.../contributions/[id].ts`, `.../me/contributions.ts`, `.../moderation/contributions.ts`, `.../moderation/contributions/[id]/[decision].ts` | The Stage 12 API contract, fail-closed until auth lands. |
 | Applied schema + rollback | `d1/migrations/0005_create_contributions.sql` (promoted, applied to production), `d1/rollback/0005_drop_contributions.sql` | Additive two-table schema (validated) with a clean reverse script. |
-| Behaviour test | `scripts/stage13-contributions.test.mjs` (`pnpm test:stage13`) | Proves the 24 required conditions against in-memory D1 + the real 776/845/1,112 dataset. |
+| Behaviour test | `scripts/stage13-contributions.test.mjs` (`pnpm test:stage13`) | Proves the 24 required conditions against in-memory D1 + the real 777/847/1,112 dataset. |
 
 ### Contribution kinds supported (from Stage 12)
 
@@ -146,7 +146,7 @@ No other file changes.
 ## Testing
 
 * `pnpm test:stage13` (run: `node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/stage13-contributions.test.mjs`)
-  — covers all 24 brief conditions; asserts the real **776 canonical / 845
+  — covers all 24 brief conditions; asserts the real **777 canonical / 847
   provenance / 1,112 legacy** rows stay intact and that only the allow-listed
   apply path ever edits a canonical column.
 * Regression suite still green: `d1-schema` (five-table guard), `d1-preview`,

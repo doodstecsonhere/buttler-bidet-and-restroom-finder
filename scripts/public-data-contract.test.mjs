@@ -1,7 +1,7 @@
 // Stage 5B — public data contract gate.
 //
 // Proves the public projection (API shape), the generated offline bundle, and
-// the canonical D1 read model agree on exactly one catalogue: the 776-row
+// the canonical D1 read model agree on exactly one catalogue: the 777-row
 // canonical dataset with its approved semantics. It never touches production:
 // everything runs against an isolated in-memory SQLite database seeded from
 // the committed migrations, the same way the other data tests run.
@@ -19,10 +19,11 @@ import { loadCanonicalDataset } from "./import-canonical.mjs";
 
 const migrationsDir = new URL("../d1/migrations/", import.meta.url);
 const ddlPath = new URL("0003_create_canonical_read_model.sql", migrationsDir);
-// The seed arrives as an ordered set of Wrangler-safe chunk files; applying
-// them in name order keeps locations before their provenance links.
+// The seed arrives as an ordered set of Wrangler-safe chunk files (frozen
+// 0004_* base plus forward 0007_* additions); applying them in name order
+// keeps locations before their provenance links.
 const seedPaths = readdirSync(migrationsDir)
-  .filter((name) => /^0004_seed_canonical_locations.*\.sql$/.test(name))
+  .filter((name) => /^000[47]_seed_canonical_locations.*\.sql$/.test(name))
   .sort()
   .map((name) => new URL(name, migrationsDir));
 
@@ -39,7 +40,7 @@ const served = database
 // 1. The full canonical catalogue is public, including the 625 discovery
 //    candidates whose restroom presence is Unknown. Nothing is filtered out
 //    merely for being uncertain.
-assert.equal(served.length, 776);
+assert.equal(served.length, 777);
 
 // 2. Canonical string ids are served untouched; no numeric coercion.
 for (const record of served) {
@@ -50,11 +51,11 @@ for (const record of served) {
 // 3. Bidet evidence: exactly the owner-approved split, derived from the
 //    existing verification column. No invented classifications.
 const bidetRecords = served.filter((record) => record.bidet);
-assert.equal(bidetRecords.length, 114);
+assert.equal(bidetRecords.length, 115);
 assert.equal(
   bidetRecords.filter((record) => record.bidet_evidence === "field_verified")
     .length,
-  98,
+  99,
 );
 assert.equal(
   bidetRecords.filter((record) => record.bidet_evidence === "osm_explicit")

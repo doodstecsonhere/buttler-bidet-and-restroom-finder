@@ -20,7 +20,7 @@
 //
 // Usage:
 //   node scripts/import-canonical.mjs --validate   validate inputs + report
-//   node scripts/import-canonical.mjs --write      regenerate migrations 0003/0004...
+//   node scripts/import-canonical.mjs --write      refresh 0003 DDL + forward 0007_* additions (frozen 0001-0006 never rewritten)
 //   node scripts/import-canonical.mjs --check      fail if committed migrations are stale
 
 import { createHash } from "node:crypto";
@@ -35,6 +35,11 @@ const PROVENANCE_CSV = new URL("../attached_assets/buttler_location_provenance.c
 const MIGRATIONS_DIR = new URL("../d1/migrations/", import.meta.url);
 const DDL_FILE = "0003_create_canonical_read_model.sql";
 const SEED_BASE = "0004_seed_canonical_locations";
+// Stage 14G: migrations 0001-0006 (including every 0004_* seed chunk) are
+// already applied in production and their ledger names can never re-run, so
+// they are FROZEN history. Any genuinely new canonical location arrives in a
+// NEW forward migration under this prefix instead of rewriting the base.
+const ADD_BASE = "0007_seed_canonical_locations_added";
 
 // Rows per seed statement. Kept small so a single statement stays well under
 // both the per-file byte budget and the 100,000 byte per-statement ceiling of
@@ -154,23 +159,30 @@ export const PROTECTED_DISTINCT_ENTITIES = [
   "Silliman University Senior High School Building",
 ];
 
-export const EXPECTED_VERIFIED_BIDET_COUNT = 98;
+export const EXPECTED_VERIFIED_BIDET_COUNT = 99;
 
 export function sha256(buffer) {
   return createHash("sha256").update(buffer).digest("hex");
 }
 
 export function loadCanonicalDataset({ canonicalPath = CANONICAL_CSV, provenancePath = PROVENANCE_CSV } = {}) {
-  const canonicalFile = readFileSync(canonicalPath);
-  const provenanceFile = readFileSync(provenancePath);
-  const canonical = parseCsvRecords(canonicalFile.toString("utf8"));
-  const provenance = parseCsvRecords(provenanceFile.toString("utf8"));
+  // Hash and parse the LF-normalized bytes. Git checks these CSVs out with
+  // CRLF on Windows (core.autocrlf=true) but stores LF in the index, so hashing
+  // the raw working-tree bytes produced a false "stale" fingerprint on Windows
+  // while staying correct on Linux CI. Normalizing first makes the fingerprint
+  // identical on every platform, which is what the frozen 0004_* headers and the
+  // generated 0007 additions header both rely on. (Established LF-normalized
+  // equivalence check; see d1/README.md and the Stage 5C-B splitter notes.)
+  const canonicalText = readFileSync(canonicalPath).toString("utf8").replaceAll("\r\n", "\n");
+  const provenanceText = readFileSync(provenancePath).toString("utf8").replaceAll("\r\n", "\n");
+  const canonical = parseCsvRecords(canonicalText);
+  const provenance = parseCsvRecords(provenanceText);
   return {
     canonical: canonical.records,
     provenance: provenance.records,
     fingerprints: {
-      canonical_csv_sha256: sha256(canonicalFile),
-      provenance_csv_sha256: sha256(provenanceFile),
+      canonical_csv_sha256: sha256(Buffer.from(canonicalText, "utf8")),
+      provenance_csv_sha256: sha256(Buffer.from(provenanceText, "utf8")),
       canonical_rows: canonical.records.length,
       provenance_rows: provenance.records.length,
     },
@@ -673,6 +685,123 @@ export function generateCanonicalSeedSql(canonical, provenance, fingerprints) {
   return files;
 }
 
+// The set of canonical ids already carried by the committed, already-applied
+// 0004_* seed chunks. That set is the frozen cutover base: every one of those
+// names is in the production d1_migrations ledger and can never run again, so
+// the generator must never rewrite those files. New places are the CSV rows
+// whose id is NOT in this set.
+export function listCommittedSeedCanonicalIds(dir = fileURLToPath(MIGRATIONS_DIR)) {
+  const ids = new Set();
+  for (const name of readdirSync(dir)) {
+    if (!isSeedMigrationFile(name)) continue;
+    const sql = readFileSync(resolve(dir, name), "utf8");
+    for (const match of sql.matchAll(/buttler_loc_[0-9a-f]{20}/g)) {
+      ids.add(match[0]);
+    }
+  }
+  return ids;
+}
+
+// Splits the full CSV into the frozen base (ids already seeded in 0004) and the
+// post-cutover additions that must go into a new forward migration.
+export function splitBaseAndAdditions(canonical, provenance, baseIds) {
+  const canonicalAdditions = canonical.filter(
+    (row) => !baseIds.has(row.Canonical_Location_ID),
+  );
+  const provenanceAdditions = provenance.filter(
+    (row) => !baseIds.has(row.Canonical_Location_ID),
+  );
+  return { canonicalAdditions, provenanceAdditions };
+}
+
+// Mirrors generateCanonicalSeedSql's statement builders and upsert semantics
+// exactly, but writes to the ADD_BASE prefix and always uses a two-digit chunk
+// suffix (0007_seed_canonical_locations_added_01.sql). Idempotent upsert by
+// primary key, canonical rows emitted before their provenance links (FK order),
+// and the same Wrangler-safe (no bare BEGIN/CASE/END) COALESCE/NULLIF guard.
+export function generateAdditionsSql(canonicalAdditions, provenanceAdditions, fingerprints) {
+  if (canonicalAdditions.length === 0 && provenanceAdditions.length === 0) {
+    return [];
+  }
+  const byId = [...canonicalAdditions].sort((a, b) =>
+    a.Canonical_Location_ID < b.Canonical_Location_ID ? -1 : 1,
+  );
+  const provSorted = [...provenanceAdditions].sort((a, b) => {
+    const left = `${a.Canonical_Location_ID}|${a.Source_Link_ID}`;
+    const right = `${b.Canonical_Location_ID}|${b.Source_Link_ID}`;
+    return left < right ? -1 : 1;
+  });
+
+  const header = [
+    "-- Generated by scripts/import-canonical.mjs from the owner-approved",
+    "-- canonical dataset; do not edit by hand.",
+    "-- Stage 14G post-cutover additions: this forward migration adds ONLY",
+    "-- canonical rows whose id is absent from the frozen 0004_* seed, because",
+    "-- 0001-0006 are already recorded in the production migration ledger and",
+    "-- their file names can never re-run. Re-applying upserts by primary key.",
+    `-- canonical_csv_sha256=${fingerprints.canonical_csv_sha256}`,
+    `-- provenance_csv_sha256=${fingerprints.provenance_csv_sha256}`,
+    `-- additions_canonical_rows=${canonicalAdditions.length}`,
+    `-- additions_provenance_rows=${provenanceAdditions.length}`,
+    "-- reviewed record_status is preserved via COALESCE/NULLIF rather than CASE",
+    "-- WHEN, because Wrangler's SQL splitter treats a trailing `CASE ` as an",
+    "-- unclosed compound statement and merges the rest of the file into one",
+    "-- statement that local D1 then rejects with SQLITE_TOOBIG.",
+    "",
+  ].join("\n");
+
+  const statements = [];
+  for (let index = 0; index < byId.length; index += SEED_BATCH_ROWS) {
+    const batch = byId.slice(index, index + SEED_BATCH_ROWS);
+    statements.push(
+      [
+        `INSERT INTO canonical_locations (\n  ${[CANONICAL_COLUMNS[0], "record_status", ...CANONICAL_COLUMNS.slice(1)].join(", ")}\n) VALUES`,
+        batch.map(canonicalRowSql).join(",\n"),
+        "ON CONFLICT(canonical_id) DO UPDATE SET\n  " +
+          CANONICAL_COLUMNS.slice(1)
+            .map((column) => `${column} = excluded.${column}`)
+            .join(",\n  ") +
+          ",\n  record_status = COALESCE(NULLIF(CAST(canonical_locations.record_status AS TEXT), 'candidate'), excluded.record_status),\n  updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now');",
+      ].join("\n"),
+    );
+  }
+  for (let index = 0; index < provSorted.length; index += SEED_BATCH_ROWS) {
+    const batch = provSorted.slice(index, index + SEED_BATCH_ROWS);
+    statements.push(
+      [
+        `INSERT INTO location_provenance (\n  ${PROVENANCE_COLUMNS.join(", ")}\n) VALUES`,
+        batch.map(provenanceRowSql).join(",\n"),
+        "ON CONFLICT(canonical_id, source_link_id) DO UPDATE SET\n  " +
+          PROVENANCE_COLUMNS.slice(1)
+            .map((column) => `${column} = excluded.${column}`)
+            .join(",\n  ") + ";",
+      ].join("\n"),
+    );
+  }
+
+  const chunks = [];
+  let current = [];
+  for (const statement of statements) {
+    const candidate = [...current, statement];
+    const candidateSql = `${header}\n${candidate.join("\n\n")}\n`;
+    if (
+      current.length > 0 &&
+      Buffer.byteLength(candidateSql) > MIGRATION_FILE_BUDGET_BYTES
+    ) {
+      chunks.push(current);
+      current = [statement];
+    } else {
+      current = candidate;
+    }
+  }
+  if (current.length > 0) chunks.push(current);
+
+  return chunks.map((chunk, index) => ({
+    file: `${ADD_BASE}_${String(index + 1).padStart(2, "0")}.sql`,
+    sql: `${header}\n${chunk.join("\n\n")}\n`,
+  }));
+}
+
 // ---- Faithful port of Wrangler's D1 SQL splitter (src/d1/splitter.ts +
 // trimmer.ts) so migration-safety assertions match exactly what
 // `wrangler d1 migrations apply` does. It strips `--` line comments and
@@ -843,73 +972,160 @@ function isSeedMigrationFile(name) {
   return name.startsWith(`${SEED_BASE}`) && name.endsWith(".sql");
 }
 
+function isAdditionsMigrationFile(name) {
+  return name.startsWith(`${ADD_BASE}`) && name.endsWith(".sql");
+}
+
 if (isEntry && (mode === "--validate" || mode === "--write" || mode === "--check")) {
   const dataset = loadCanonicalDataset();
   const stats = validateDataset(dataset);
-  const seedFiles = generateCanonicalSeedSql(
-    dataset.canonical,
-    dataset.provenance,
-    dataset.fingerprints,
-  );
   const ddlSql = generateCanonicalDdlSql();
   const migrationsDirPath = fileURLToPath(MIGRATIONS_DIR);
-  const seedFileList = seedFiles.map(({ file }) => file).join(",");
+
+  // The committed 0004_* seed defines the frozen cutover base. When it exists,
+  // --write and --check must never regenerate it from the (now larger) CSV, or
+  // they would rewrite applied migration history. When no base is on disk yet
+  // (a fresh from-scratch bootstrap) the whole CSV seeds 0004 as before.
+  const baseIds = listCommittedSeedCanonicalIds(migrationsDirPath);
+  const baseExists = baseIds.size > 0;
+  const { canonicalAdditions, provenanceAdditions } = splitBaseAndAdditions(
+    dataset.canonical,
+    dataset.provenance,
+    baseIds,
+  );
+  const additionFiles = generateAdditionsSql(
+    canonicalAdditions,
+    provenanceAdditions,
+    dataset.fingerprints,
+  );
+  // In a bootstrap the additions ARE the whole dataset, emitted as 0004.
+  const baseSeedFiles = baseExists
+    ? null
+    : generateCanonicalSeedSql(
+        dataset.canonical,
+        dataset.provenance,
+        dataset.fingerprints,
+      );
+  const filesToSafetyCheck = [
+    ...(baseSeedFiles ?? []),
+    ...additionFiles,
+  ];
+
+  // Guard: a frozen base id that has vanished from the CSV would silently drop
+  // production history on the next bootstrap, so refuse loudly instead.
+  const csvIdSet = new Set(
+    dataset.canonical.map((row) => row.Canonical_Location_ID),
+  );
+  const droppedBaseIds = [...baseIds].filter((id) => !csvIdSet.has(id));
 
   if (mode === "--validate") {
-    // Validate that the generated migrations would apply cleanly under
-    // Wrangler's local D1 splitter before reporting the dataset stats.
-    assertMigrationsAreWranglerSafe(seedFiles);
+    assertMigrationsAreWranglerSafe(filesToSafetyCheck);
     console.log(
       JSON.stringify(
-        { ok: true, ...dataset.fingerprints, ...stats, seed_files: seedFiles.map(({ file }) => file) },
+        {
+          ok: true,
+          ...dataset.fingerprints,
+          ...stats,
+          frozen_base_canonical_ids: baseIds.size,
+          additions_canonical_rows: canonicalAdditions.length,
+          additions_provenance_rows: provenanceAdditions.length,
+          base_files: baseExists ? null : (baseSeedFiles ?? []).map(({ file }) => file),
+          addition_files: additionFiles.map(({ file }) => file),
+        },
         null,
         2,
       ),
     );
   } else if (mode === "--write") {
-    assertMigrationsAreWranglerSafe(seedFiles);
+    if (droppedBaseIds.length) {
+      throw new Error(
+        `Refusing to write: frozen base canonical ids are missing from the CSV (${droppedBaseIds.join(", ")}). Restoring the base rows is a separate, reviewed action.`,
+      );
+    }
+    assertMigrationsAreWranglerSafe(filesToSafetyCheck);
+    // 0003 DDL is deterministic and CSV-independent; keep it current.
     writeFileSync(new URL(DDL_FILE, MIGRATIONS_DIR), ddlSql, "utf8");
-    const expected = new Set(seedFiles.map(({ file }) => file));
-    for (const { file, sql } of seedFiles) {
+    if (!baseExists) {
+      // Fresh bootstrap: seed the entire dataset into 0004 (original behaviour).
+      const expectedBase = new Set(baseSeedFiles.map(({ file }) => file));
+      for (const { file, sql } of baseSeedFiles) {
+        writeFileSync(new URL(file, MIGRATIONS_DIR), sql, "utf8");
+      }
+      for (const name of readdirSync(migrationsDirPath)) {
+        if (isSeedMigrationFile(name) && !expectedBase.has(name)) {
+          rmSync(new URL(name, MIGRATIONS_DIR));
+        }
+      }
+    }
+    // Post-cutover additions go into the new forward migration(s). The frozen
+    // 0004_* files are never rewritten.
+    const expectedAdd = new Set(additionFiles.map(({ file }) => file));
+    for (const { file, sql } of additionFiles) {
       writeFileSync(new URL(file, MIGRATIONS_DIR), sql, "utf8");
     }
-    // Remove seed chunks left over from a previous (different) chunking so the
-    // migration directory never holds stale or duplicated data.
     for (const name of readdirSync(migrationsDirPath)) {
-      if (isSeedMigrationFile(name) && !expected.has(name)) {
+      if (isAdditionsMigrationFile(name) && !expectedAdd.has(name)) {
         rmSync(new URL(name, MIGRATIONS_DIR));
       }
     }
     console.log(
-      `CANONICAL_MIGRATIONS_WRITTEN canonical_rows=${dataset.canonical.length} provenance_rows=${dataset.provenance.length} seed_files=${seedFileList}`,
+      `CANONICAL_MIGRATIONS_WRITTEN canonical_rows=${dataset.canonical.length} provenance_rows=${dataset.provenance.length} frozen_base=${baseIds.size} additions_canonical=${canonicalAdditions.length} additions_provenance=${provenanceAdditions.length} addition_files=${additionFiles.map(({ file }) => file).join(",")}`,
     );
   } else {
-    assertMigrationsAreWranglerSafe(seedFiles);
+    assertMigrationsAreWranglerSafe(filesToSafetyCheck);
     const problems = [];
+    if (droppedBaseIds.length) {
+      problems.push(`frozen base canonical ids missing from CSV: ${droppedBaseIds.join(", ")}`);
+    }
     const currentDdl = migrationSqlExists(migrationsDirPath, DDL_FILE)
       ? readFileSync(new URL(DDL_FILE, MIGRATIONS_DIR), "utf8").replaceAll("\r\n", "\n")
       : "";
     if (currentDdl !== ddlSql) problems.push(`${DDL_FILE}: content differs from generated DDL`);
-    const expected = new Set(seedFiles.map(({ file }) => file));
-    for (const { file, sql } of seedFiles) {
+
+    if (!baseExists) {
+      // Bootstrap check: regenerate 0004 from the full CSV and compare.
+      const expected = new Set(baseSeedFiles.map(({ file }) => file));
+      for (const { file, sql } of baseSeedFiles) {
+        const current = migrationSqlExists(migrationsDirPath, file)
+          ? readFileSync(new URL(file, MIGRATIONS_DIR), "utf8").replaceAll("\r\n", "\n")
+          : null;
+        if (current === null) problems.push(`${file}: missing`);
+        else if (current !== sql) problems.push(`${file}: content differs from generated seed`);
+      }
+      for (const name of readdirSync(migrationsDirPath)) {
+        if (isSeedMigrationFile(name) && !expected.has(name)) {
+          problems.push(`${name}: unexpected stale seed migration`);
+        }
+      }
+    } else {
+      // Frozen-base check: the base files are applied history; only confirm they
+      // are still present and that no CSV row leaked into them.
+      const onDiskBase = readdirSync(migrationsDirPath).filter(isSeedMigrationFile);
+      if (onDiskBase.length === 0) problems.push("no committed 0004_* seed found to anchor the frozen base");
+    }
+
+    // Additions check: generated forward migration(s) must match what is on disk.
+    const expectedAdd = new Set(additionFiles.map(({ file }) => file));
+    for (const { file, sql } of additionFiles) {
       const current = migrationSqlExists(migrationsDirPath, file)
         ? readFileSync(new URL(file, MIGRATIONS_DIR), "utf8").replaceAll("\r\n", "\n")
         : null;
       if (current === null) problems.push(`${file}: missing`);
-      else if (current !== sql) problems.push(`${file}: content differs from generated seed`);
+      else if (current !== sql) problems.push(`${file}: content differs from generated additions`);
     }
     for (const name of readdirSync(migrationsDirPath)) {
-      if (isSeedMigrationFile(name) && !expected.has(name)) {
-        problems.push(`${name}: unexpected stale seed migration`);
+      if (isAdditionsMigrationFile(name) && !expectedAdd.has(name)) {
+        problems.push(`${name}: unexpected stale additions migration`);
       }
     }
+
     if (problems.length) {
       throw new Error(
         `Canonical D1 migrations are stale; run: node scripts/import-canonical.mjs --write\n${problems.join("\n")}`,
       );
     }
     console.log(
-      `CANONICAL_MIGRATIONS_CURRENT canonical_rows=${dataset.canonical.length} provenance_rows=${dataset.provenance.length} seed_files=${seedFileList}`,
+      `CANONICAL_MIGRATIONS_CURRENT canonical_rows=${dataset.canonical.length} provenance_rows=${dataset.provenance.length} frozen_base=${baseIds.size} additions_canonical=${canonicalAdditions.length} addition_files=${additionFiles.map(({ file }) => file).join(",")}`,
     );
   }
 } else if (isEntry) {

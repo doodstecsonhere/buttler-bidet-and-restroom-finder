@@ -88,8 +88,8 @@ const baselineCanonical = count("SELECT count(*) AS c FROM canonical_locations")
 const baselineProvenance = count("SELECT count(*) AS c FROM location_provenance");
 const baselineLegacy = count("SELECT count(*) AS c FROM restroom_locations");
 // The prompt's production dataset; the local seed must reproduce it exactly.
-assert.equal(baselineCanonical, 776, "canonical rows should match the 776-row dataset");
-assert.equal(baselineProvenance, 845, "provenance links should match the 845-row dataset");
+assert.equal(baselineCanonical, 777, "canonical rows should match the 777-row dataset");
+assert.equal(baselineProvenance, 847, "provenance links should match the 847-row dataset");
 assert.equal(baselineLegacy, 1112, "legacy restroom rows should match the 1,112-row table");
 
 const realId = sqlite
