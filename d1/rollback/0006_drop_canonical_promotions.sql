@@ -1,0 +1,23 @@
+-- Rollback for the Stage 14B canonical promotion ledger (migration 0006).
+--
+-- 0006_create_canonical_promotions.sql is schema-only and, at the time this
+-- script was written, validated against disposable local D1 databases only;
+-- applying 0006 to the production D1 `buttler-read-model` is a separately
+-- owner-approved gate (Stage 14A contract §19). This script is the documented
+-- reversal path for an applied 0006 (contract §18: "the 0006 migration has a
+-- tested drop script prepared in 14B").
+--
+-- Scope: removes ONLY the canonical_promotions table. Its two indexes
+-- (idx_canonical_promotions_contribution, idx_canonical_promotions_canonical)
+-- are SQLite-owned indexes on that table and are dropped with it — no
+-- separate DROP INDEX is needed. Dropping the table deletes promotion ledger
+-- rows, so if 0006 was ever applied with real promotions this is a
+-- destructive action requiring a verified backup and separate approval.
+--
+-- It never touches canonical_locations, location_provenance, the legacy
+-- restroom_locations table, contributions, or contribution_events, and it
+-- alters no existing migration or table. The self-referencing foreign key
+-- (reversal_of) is internal to this table, so a single DROP is safe in any
+-- foreign_keys mode.
+
+DROP TABLE IF EXISTS canonical_promotions;
