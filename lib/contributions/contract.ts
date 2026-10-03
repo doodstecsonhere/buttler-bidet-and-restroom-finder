@@ -55,6 +55,11 @@ export type ValidationStatus = (typeof VALIDATION_STATUSES)[number];
 // D1 CHECK constraint in the staged migration.
 export const MAX_NOTES_LENGTH = 2000;
 export const MAX_MODERATION_NOTE_LENGTH = 2000;
+// Stage 14E operator note on a promotion. Kept at the same 2000 cap as the
+// `promotion_note` CHECK in d1/migrations/0006 and the Stage 14D executor's own
+// `MAX_PROMOTION_NOTE_LENGTH`; these three must agree so a value the boundary
+// accepts is always a value the ledger CHECK stores.
+export const MAX_PROMOTION_NOTE_LENGTH = 2000;
 export const MAX_PAYLOAD_JSON_LENGTH = 8000;
 export const MAX_EVIDENCE_JSON_LENGTH = 8000;
 export const MAX_BODY_BYTES = 16 * 1024;

@@ -30,6 +30,14 @@ export type Decision = "approve" | "reject";
 
 export type AuthzResult = { ok: true } | { ok: false; status: number; error: string };
 
+// The promotion predicate returns a machine-readable `code` alongside the
+// Stage 13 `status`/`error` shape so the 14E endpoint can surface a stable
+// reason without a caller parsing prose. It is additive — the existing
+// AuthzResult used by read/decision/apply is untouched.
+export type PromotionAuthzResult =
+  | { ok: true }
+  | { ok: false; status: number; error: string; code: string };
+
 export function isModerator(identity: Identity | null): boolean {
   return !!identity && (identity.role === "moderator" || identity.role === "admin");
 }
@@ -97,6 +105,48 @@ export function authorizeCanonicalApply(
   // reason to refuse.
   if (contribution.status !== "approved") {
     return { ok: false, status: 409, error: "only an approved contribution may apply" };
+  }
+  return { ok: true };
+}
+
+// Stage 14E promotion gate (contract §4). Deliberately narrower than a
+// moderator decision: promotion turns an approved observation into a canonical
+// write, so it requires membership in a SEPARATE server-side promoter
+// allow-list (`BUTTLER_PROMOTER_IDS`), enforced here as an EXACT id match — no
+// wildcard, no substring, no client-supplied identity, and moderator status
+// alone never implies promoter status. It also refuses self-promotion (the
+// promoter `sub` must differ from the contributor) and any contribution that
+// is not already approved. This predicate decides *who may promote what* and
+// performs no write; kind eligibility, the ledger replay gate, drift, and the
+// §8/§11/§12 policy matrix stay the Stage 14D executor's job, so the trust
+// boundary and the execution engine never duplicate each other.
+export function authorizeCanonicalPromotion(
+  identity: Identity | null,
+  contribution: ContributionRef,
+  promoterUserIds: readonly string[],
+): PromotionAuthzResult {
+  if (!identity) {
+    return { ok: false, status: 401, error: "authentication required", code: "authentication_required" };
+  }
+  // The verified subject must be a non-empty string; the auth layer already
+  // guarantees this, but the gate fails closed rather than trusting it.
+  if (typeof identity.userId !== "string" || identity.userId.length === 0) {
+    return { ok: false, status: 401, error: "authenticated identity has no subject", code: "identity_missing" };
+  }
+  // Promoter membership: exact comparison only. An empty list can never match
+  // (the HTTP seam maps an absent/malformed allow-list to 503 before this).
+  if (!promoterUserIds.includes(identity.userId)) {
+    return { ok: false, status: 403, error: "promoter authorization required", code: "promoter_required" };
+  }
+  // No self-promotion — even a promoter who is also the approving moderator.
+  if (
+    contribution.contributor_user_id !== null &&
+    contribution.contributor_user_id === identity.userId
+  ) {
+    return { ok: false, status: 403, error: "cannot promote your own submission", code: "self_promotion" };
+  }
+  if (contribution.status !== "approved") {
+    return { ok: false, status: 409, error: "only an approved contribution may be promoted", code: "not_approved" };
   }
   return { ok: true };
 }

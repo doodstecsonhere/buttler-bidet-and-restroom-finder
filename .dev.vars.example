@@ -20,3 +20,13 @@ AUTH0_CLIENT_ID=
 # Server-side moderator allow-list: comma-separated Auth0 `sub` values.
 # Empty/absent means "no moderators" (fails closed). Never expose client-side.
 BUTTLER_MODERATOR_IDS=
+
+# Stage 14E server-side PROMOTER allow-list: comma-separated Auth0 `sub` values
+# permitted to promote an approved contribution into canonical data. This is a
+# SEPARATE, narrower list from moderators — being a moderator does not imply
+# being a promoter. Absent/empty means promotion is not open (the endpoint fails
+# closed with 503); a wildcard such as `*` is treated as a misconfiguration and
+# also fails closed. Identity is taken only from a verified token, never a body
+# or header. Leave blank for local dev unless you are testing a promotion. Never
+# expose client-side, and never configure real values in Git.
+BUTTLER_PROMOTER_IDS=

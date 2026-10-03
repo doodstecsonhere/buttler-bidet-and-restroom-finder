@@ -45,6 +45,12 @@ export interface AuthEnv {
   // Empty/absent means "no moderators", which fails closed. Not a secret, but
   // keep it server-side (it must not appear in any client-visible bundle).
   BUTTLER_MODERATOR_IDS?: string;
+  // Stage 14E: opaque comma-separated list of provider subject ids allowed to
+  // promote an approved contribution into canonical data. A SEPARATE, narrower
+  // allow-list from moderators (contract §4). Env-name only, never client-
+  // visible, fail-closed when empty. Absent => the promotion endpoint answers
+  // 503; a malformed (wildcard) entry fails closed too.
+  BUTTLER_PROMOTER_IDS?: string;
   // Auth0 tenant domain, e.g. `your-tenant.region.auth0.com` (scheme optional).
   // Not a secret. Drives BOTH the expected issuer and the JWKS URL.
   AUTH0_DOMAIN?: string;
@@ -128,6 +134,43 @@ export function roleFor(subjectId: string, env: AuthEnv): Role {
     .map((value) => value.trim())
     .filter(Boolean);
   return moderators.includes(subjectId) ? "moderator" : "contributor";
+}
+
+// --- Promoter allow-list (Stage 14E, contract §4) --------------------------
+
+// Tokens that would turn the allow-list into "everybody". Their presence is
+// treated as a MISCONFIGURATION and fails closed, so nobody can open the
+// promotion gate by publishing `*` / `all` / `any`.
+const NON_SPECIFIC_PROMOTER_TOKENS: ReadonlySet<string> = new Set(["*", "all", "any"]);
+
+export type PromoterAllowList =
+  // Absent / blank / only-empty-tokens: the capability is not wired. => 503.
+  | { status: "unconfigured" }
+  // Present but contains a non-specific (wildcard) token: refuse to interpret
+  // it as "everyone". => fail closed (503).
+  | { status: "malformed" }
+  // A concrete list of opaque subject ids. Membership is an EXACT match.
+  | { status: "ok"; ids: string[] };
+
+/**
+ * Parse the server-side promoter allow-list. Mirrors `roleFor`'s trimming but
+ * adds the fail-closed distinctions the promotion gate needs: an absent or
+ * empty list means the capability is simply not configured, and a wildcard
+ * token is treated as a configuration error rather than an open door. Callers
+ * compare a verified subject against `ids` by exact string equality only.
+ */
+export function resolvePromoterAllowList(env: AuthEnv): PromoterAllowList {
+  const raw = env.BUTTLER_PROMOTER_IDS;
+  if (raw === undefined) return { status: "unconfigured" };
+  const ids = raw
+    .split(",")
+    .map((value) => value.trim())
+    .filter(Boolean);
+  if (ids.length === 0) return { status: "unconfigured" };
+  if (ids.some((id) => NON_SPECIFIC_PROMOTER_TOKENS.has(id.toLowerCase()))) {
+    return { status: "malformed" };
+  }
+  return { status: "ok", ids };
 }
 
 // Retained for documentation/parity with the original seam notes: the provider

@@ -15,6 +15,7 @@
 import {
   MAX_MODERATION_NOTE_LENGTH,
   MAX_NOTES_LENGTH,
+  MAX_PROMOTION_NOTE_LENGTH,
   isContributionKind,
   validatePayload,
   validateTargetForKind,
@@ -24,13 +25,18 @@ import {
 } from "../../lib/contributions/contract.ts";
 import {
   authorizeCanonicalApply,
+  authorizeCanonicalPromotion,
   authorizeDecision,
   authorizeRead,
   statusForDecision,
   type Decision,
   type Identity,
 } from "../../lib/contributions/authorize.ts";
-import { planAndExecuteCanonicalPromotion, type PromotionDatabase } from "./canonical-promotion.ts";
+import {
+  planAndExecuteCanonicalPromotion,
+  type PromotionDatabase,
+  type PromotionFailureReason,
+} from "./canonical-promotion.ts";
 
 // A minimal D1 surface, matched by both the real Pages binding and the in-memory
 // adapter the test suite injects.
@@ -63,7 +69,16 @@ export interface ContributionRow {
 
 export type StoreResult<T> =
   | { ok: true; value: T }
-  | { ok: false; status: number; error: string };
+  | {
+      ok: false;
+      status: number;
+      error: string;
+      // Optional machine-readable reason + structured extras. Only the Stage
+      // 14E promotion path populates these; every existing caller keeps the
+      // plain `{ status, error }` shape, so widening is backward compatible.
+      code?: string;
+      details?: Record<string, unknown>;
+    };
 
 // Anti-spam: a bounded number of unresolved submissions per contributor, and a
 // soft de-duplicate when the same claim is already open on the same place.
@@ -340,6 +355,131 @@ export async function applyApprovedToCanonical(
     return { ok: true, value: { applied: false } };
   }
   return { ok: false, status: 409, error: `${result.reason}: ${result.message}` };
+}
+
+// ---------------------------------------------------------------------------
+// Stage 14E — the promoter-facing canonical promotion (contract §4 / §15 / §16)
+// ---------------------------------------------------------------------------
+
+// The success projection the endpoint returns (frozen §15 shape). Nothing here
+// is caller-influenceable: every field is derived from stored data by the
+// Stage 14D executor.
+export type PromotionSuccess = {
+  promotionId: string;
+  canonicalId: string;
+  changedColumns: readonly string[];
+  promotedAt: string;
+};
+
+// Maps the executor's HTTP-free failure reasons onto the contract §16 status
+// classes. Kept as one exhaustive switch so a new executor reason is a
+// compile-time error here rather than a silent 500.
+function promotionFailure(result: {
+  reason: PromotionFailureReason;
+  message: string;
+  details?: Record<string, unknown>;
+}): { status: number; error: string; code: string; details?: Record<string, unknown> } {
+  let status: number;
+  switch (result.reason) {
+    case "not_found":
+    case "canonical_target_not_found":
+      status = 404;
+      break;
+    case "not_approved":
+    case "kind_not_promotable":
+    case "manual_import_only":
+    case "already_promoted":
+    case "stale_snapshot":
+    case "proximity_conflict":
+    case "bidet_downgrade_forbidden":
+    case "bidet_survey_conflict":
+      status = 409;
+      break;
+    case "address_blank":
+    case "coordinates_partial":
+    case "coordinate_out_of_bounds":
+    case "coordinate_evidence_required":
+    case "invalid_plan":
+      status = 422;
+      break;
+    case "phase2_failed":
+      status = 500;
+      break;
+    default: {
+      // Exhaustiveness guard: an unhandled reason must not compile silently.
+      const _exhaustive: never = result.reason;
+      status = 500;
+      void _exhaustive;
+    }
+  }
+  return {
+    status,
+    error: result.message,
+    code: result.reason,
+    ...(result.details ? { details: result.details } : {}),
+  };
+}
+
+// The Stage 14E store entry point behind POST .../promotion. Unlike the inert
+// moderator-shaped `applyApprovedToCanonical`, this authorizes against the
+// SEPARATE promoter allow-list and an explicit no-self-promotion rule, then
+// hands only trusted inputs (the stored contribution id + the verified
+// promoter subject) to the frozen Stage 14D executor. The executor derives the
+// target, kind, changed columns, and snapshot from stored data — a caller can
+// never smuggle any of them. Authorization is decided here; the canonical write
+// is done solely by the executor.
+export async function promoteApprovedToCanonical(
+  db: D1Database,
+  identity: Identity,
+  contributionId: string,
+  promoterUserIds: readonly string[],
+  promotionNote: string | null,
+): Promise<StoreResult<PromotionSuccess>> {
+  if (promotionNote !== null && promotionNote.length > MAX_PROMOTION_NOTE_LENGTH) {
+    return {
+      ok: false,
+      status: 413,
+      error: `promotion_note exceeds ${MAX_PROMOTION_NOTE_LENGTH} characters`,
+      code: "promotion_note_too_long",
+    };
+  }
+
+  // loadContribution treats a malformed id as not-found (no DB hit), matching
+  // the §16 "missing / malformed id => 404" row.
+  const row = await loadContribution(db, contributionId);
+  if (!row) {
+    return { ok: false, status: 404, error: "not found", code: "not_found" };
+  }
+
+  const auth = authorizeCanonicalPromotion(
+    identity,
+    { contributor_user_id: row.contributor_user_id, status: row.status },
+    promoterUserIds,
+  );
+  if (!auth.ok) {
+    return { ok: false, status: auth.status, error: auth.error, code: auth.code };
+  }
+
+  // The real D1 binding always provides `batch` (the executor's phase-2 write
+  // needs it); the narrow D1Database surface simply never declared it. This is
+  // the same cast `applyApprovedToCanonical` uses.
+  const result = await planAndExecuteCanonicalPromotion(db as unknown as PromotionDatabase, {
+    contributionId,
+    promoterUserId: identity.userId,
+    promotionNote,
+  });
+  if (result.ok) {
+    return {
+      ok: true,
+      value: {
+        promotionId: result.promotionId,
+        canonicalId: result.canonicalId,
+        changedColumns: result.changedColumns,
+        promotedAt: result.promotedAt,
+      },
+    };
+  }
+  return { ok: false, ...promotionFailure(result) };
 }
 
 async function loadContribution(
