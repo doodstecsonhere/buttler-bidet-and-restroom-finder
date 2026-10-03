@@ -293,8 +293,10 @@ function parseJson(text: unknown): { ok: boolean; value: unknown } {
 }
 
 // NULL-safe equality, mirroring SQLite `IS` so a NULL address compares as a
-// value rather than being "unknown not equal to unknown".
-function sameValue(a: unknown, b: unknown): boolean {
+// value rather than being "unknown not equal to unknown". Exported so the
+// Stage 14D executor compares snapshots with the exact same semantics instead
+// of a second implementation that could drift from this one.
+export function sameValue(a: unknown, b: unknown): boolean {
   if (a === null || a === undefined) return b === null || b === undefined;
   if (b === null || b === undefined) return false;
   if (typeof a === "number" && typeof b === "number") {
@@ -688,7 +690,10 @@ function resolveThreshold(value: unknown): number {
   return PROXIMITY_THRESHOLD_METERS;
 }
 
-function findProximityConflict(
+// Exported for the Stage 14D executor, which re-runs the §12 proximity guard
+// against freshly-queried neighbours at execution time — the same arithmetic,
+// from the same source, never a copy.
+export function findProximityConflict(
   latitude: number,
   longitude: number,
   targetId: string,

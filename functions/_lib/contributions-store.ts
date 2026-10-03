@@ -22,7 +22,6 @@ import {
   type ContributionStatus,
   type ValidationStatus,
 } from "../../lib/contributions/contract.ts";
-import { planCanonicalApply, renderApplyStatement } from "../../lib/contributions/apply.ts";
 import {
   authorizeCanonicalApply,
   authorizeDecision,
@@ -31,6 +30,7 @@ import {
   type Decision,
   type Identity,
 } from "../../lib/contributions/authorize.ts";
+import { planAndExecuteCanonicalPromotion, type PromotionDatabase } from "./canonical-promotion.ts";
 
 // A minimal D1 surface, matched by both the real Pages binding and the in-memory
 // adapter the test suite injects.
@@ -300,9 +300,15 @@ export async function decideContribution(
   return { ok: true, value: { status: toStatus } };
 }
 
-// The privileged canonical write — the ONLY code in Stage 13 that updates
-// canonical_locations. It requires an approved contribution and a moderator,
-// then applies an allow-listed plan. Deliberately not exposed by any endpoint.
+// The privileged canonical write — the ONLY code path that updates
+// canonical_locations. Stage 14D made this a thin wrapper over the authoritative
+// executor (functions/_lib/canonical-promotion.ts): the Stage 13 shape is kept
+// for its callers and the Stage 13 seam (moderator + approved + no self) still
+// runs first, but the promotion itself now goes through the frozen contract
+// machinery — Stage 14C planner, snapshot compare-and-swap, the
+// canonical_promotions ledger, and the audit event — instead of the old
+// column-only apply. There is deliberately no second promotion path to compete
+// with the executor. Still inert: no HTTP endpoint calls this.
 export async function applyApprovedToCanonical(
   db: D1Database,
   moderator: Identity,
@@ -320,30 +326,20 @@ export async function applyApprovedToCanonical(
     return { ok: false, status: 409, error: "new_location promotion is a manual owner import" };
   }
 
-  const plan = planCanonicalApply(
-    row.kind,
-    row.target_canonical_id,
-    JSON.parse(row.payload_json) as Record<string, unknown>,
-  );
-  if (plan.op === "noop") {
+  // The real D1 binding always provides `batch` (contract §6 phase 2 needs
+  // it); the narrow D1Database surface above simply never declared it.
+  const result = await planAndExecuteCanonicalPromotion(db as unknown as PromotionDatabase, {
+    contributionId,
+    promoterUserId: moderator.userId,
+  });
+  if (result.ok) return { ok: true, value: { applied: true } };
+  // The executor refused to write. Map its structured reasons back onto the
+  // Stage 13 result shape; "nothing to do" stays a success-without-write,
+  // every other refusal changes nothing canonical.
+  if (result.reason === "invalid_plan") {
     return { ok: true, value: { applied: false } };
   }
-
-  const { sql, values } = renderApplyStatement(plan);
-  await db
-    .prepare(sql)
-    .bind(...values)
-    .run();
-
-  await recordEvent(db, {
-    contributionId,
-    eventType: "moderation_decision",
-    actorType: "moderator",
-    actorId: moderator.userId,
-    detail: { action: "canonical_apply", columns: plan.sets.map((s) => s.column) },
-  });
-
-  return { ok: true, value: { applied: true } };
+  return { ok: false, status: 409, error: `${result.reason}: ${result.message}` };
 }
 
 async function loadContribution(

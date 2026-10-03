@@ -37,6 +37,9 @@ for (const name of readdirSync(migrationsDir).filter((n) => n.endsWith(".sql")).
 }
 
 // Minimal D1-shaped adapter over node:sqlite so the store's real SQL runs here.
+// `batch` mirrors D1's documented batch semantics (sequential statements in
+// one SQL transaction; a failure rolls the whole sequence back), which the
+// Stage 14D executor's phase-2 ledger+event write relies on.
 function makeD1(db) {
   return {
     prepare(sql) {
@@ -59,8 +62,21 @@ function makeD1(db) {
         async all() {
           return { results: stmt.all(...bound) };
         },
+        __sql: sql,
       };
       return api;
+    },
+    async batch(statements) {
+      db.exec("BEGIN");
+      try {
+        const out = [];
+        for (const statement of statements) out.push(await statement.run());
+        db.exec("COMMIT");
+        return out;
+      } catch (error) {
+        db.exec("ROLLBACK");
+        throw error;
+      }
     },
   };
 }

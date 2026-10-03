@@ -210,11 +210,24 @@ Contract properties:
   reversal is a new row (`reversal_of` set), never a status flip on the old row.
 - `UNIQUE(contribution_id)` is the persistent idempotency mechanism: a replay
   of the same contribution can never insert a second row (§6).
-- A separate reconciliation command (§19, gate 4) reads
-  `canonical_locations.updated_at` and looks up `promotion_id = 'promo_' ||
-  <32 hex of that timestamp>` — this detects a crashed-between-batches orphan.
-  The convention is safe: `promo_` + 32 hex chars = 38 characters, inside the
-  8–64 length CHECK.
+- **Promotion ids are random opaque tokens**, not derived from any timestamp:
+  `promo_` + 32 lowercase hex chars produced from `crypto.randomUUID()` (38
+  characters, inside the 8–64 length CHECK), matching the repository's existing
+  `contrib_`/`evt_` id convention. A deterministic id derived from the canonical
+  `updated_at` stamp was rejected: millisecond-precision stamps can collide
+  across concurrent promotions to different rows (a `PRIMARY KEY` clash on
+  `promotion_id`), and once any later legitimate edit re-stamps `updated_at` the
+  derived id can no longer be recomputed — so it is unsafe as both a key and a
+  reconciliation handle.
+- A separate **read-only** reconciliation command (§19, gate 4) detects a
+  crashed-between-batches orphan NOT by looking up a timestamp-derived id, but
+  by comparing each approved, promotable contribution's stored payload against
+  the live canonical row: canonical values already match the payload yet no
+  ledger row exists ⇒ a *suspected* orphan (indistinguishable from an owner
+  import of the same value, which the report states as a limitation). The
+  `idx_canonical_promotions_canonical` index supports enumerating a row's
+  promotions. Reconciliation only detects, classifies, and reports — it never
+  reconstructs or writes a ledger row (see §6, §16, §19).
 - Migration is strictly additive: creates this table and indexes only; touches
   no existing table, column, or row. Rollback: `d1/rollback/0006_drop_canonical_promotions.sql`.
 
@@ -230,14 +243,23 @@ design**, using the documented D1 semantics (verified against
 are SQL transactions. If a statement in the sequence fails, ... it aborts or
 rolls back the entire sequence"*, executing sequentially and non-concurrently.
 
-**Phase 1 — canonical mutation (one `db.batch()`, atomic):**
+**Phase 1 — canonical mutation (an optimistic compare-and-swap):**
 
-1. `SELECT` the base snapshot (7 columns + `updated_at`) of the target row.
+The implementation performs phase 1 as a **fresh read of the current target row
+followed by a single guarded compare-and-swap `UPDATE` statement**, not as a
+multi-statement batch. A lone `UPDATE` is already atomic in SQLite/D1, and the
+concurrency safety comes from the CAS `WHERE` guard (below), not from wrapping
+the read and write in one transaction:
+
+1. `SELECT` the fresh base snapshot (7 columns + `updated_at`) of the target row
+   at promotion time (no earlier approval-time snapshot is trusted).
 2. The guarded compare-and-swap UPDATE (§7): sets only allow-listed columns,
-   `updated_at = strftime(...)`, `WHERE canonical_id = ? AND updated_at = <snapshot>`
-   — plus, for an ineligible/no-op plan, a deliberately-false guard so the batch
-   aborts rather than silently writing zero rows. Any CHECK violation (e.g. the
-   bidet invariant) aborts and rolls back the whole batch.
+   `updated_at = strftime(...)`, and a `WHERE` that matches `canonical_id = ?`
+   **and all eight snapshot values with NULL-safe `IS`**. `meta.changes` must be
+   exactly `1`; if a concurrent write drifted any value, zero rows match and the
+   attempt surfaces as `stale_snapshot` (never a force, never a silent retry).
+   Any CHECK violation (e.g. the bidet invariant) rejects the statement, leaving
+   canonical unchanged.
 
 **Phase 2 — evidence trail (one `db.batch()`, atomic):**
 
@@ -248,7 +270,14 @@ rolls back the entire sequence"*, executing sequentially and non-concurrently.
    `detail_json = { action: 'canonical_promoted', promotion_id, canonical_id,
    changed_columns }`. Using `status_change` (rather than a new `promoted`
    event type) stays inside the **existing** event-type CHECK domain — no
-   0005 restatement needed.
+   0005 restatement needed. The event is written with `actor_type='moderator'`
+   and `actor_id = promoter`: the 0005 `actor_type` domain is
+   `('system','contributor','moderator')` and Stage 14D does not widen it, so
+   the privileged human promoter is recorded under the highest existing
+   human-actor type. The true promoter identity is durably and unambiguously
+   captured in the ledger's `promoter_user_id` (and `contributor_user_id`) on
+   the same batch, so the audit event stays within schema while the ledger
+   carries the promoter-specific fact.
 
 **Order rationale and the residual window:** SQLite has no
 `UPDATE ... RETURNING`, so the ledger row (which carries the resulting values)
@@ -259,12 +288,15 @@ The chosen order is **canonical-first, ledger-second**, which means:
   impossible** — phase 2 only runs after phase 1 committed with exactly one row
   changed.
 - "canonical changed but no ledger row" is possible **only** if the request
-  dies between the two batches (sub-second window). Mitigations: the HTTP
-  response reports success only after phase 2; the promotion id embeds the
-  canonical `updated_at` stamp (§5.2); a read-only reconciliation command plus
-  the `idx_canonical_promotions_canonical` index detect and heal orphans by
-  re-deriving the ledger row from the contribution payload. Failure direction
-  is toward "visible but unproven change", never silent canonical drift.
+  dies between the two commits (sub-second window). Mitigations: the HTTP
+  response reports success only after phase 2; a **read-only** reconciliation
+  command plus the `idx_canonical_promotions_canonical` index **detect and
+  classify** such orphans by comparing the approved contribution's stored
+  payload against the live canonical row — they do **not** automatically
+  reconstruct a ledger row (reconstruction would risk inventing a historical
+  record; healing an orphan is an explicit, human-approved operator action,
+  §19 gate 4). Failure direction is toward "visible but unproven change",
+  never silent canonical drift.
 
 No `passThroughOnException`, no post-response `waitUntil` for phase 2 — both
 would widen the window; phase 2 runs inline in the request.
@@ -278,10 +310,12 @@ promotion-reachable field values re-checked inside the same batch.**
 
 Answering the required questions:
 
-1. **When is the snapshot captured?** Inside the promotion request, in the same
-   `db.batch()` as the UPDATE. Because a D1 batch is a serialized SQL
-   transaction, read-and-swap is safe against concurrent promotions — no
-   earlier "approval-time" snapshot is trusted.
+1. **When is the snapshot captured?** At promotion time, by a fresh read of the
+   current target row immediately before the single guarded CAS `UPDATE` (see
+   §6 phase 1). Concurrency safety comes from the CAS `WHERE` matching all eight
+   snapshot values with NULL-safe `IS` and requiring exactly one affected row —
+   not from wrapping the read in the same transaction. No earlier
+   "approval-time" snapshot is trusted.
 2. **What fields are captured?** `access`, `fee`, `bidet_presence`, `name`,
    `address`, `latitude`, `longitude`, `updated_at`. `address` may be NULL;
    all snapshot comparisons use SQLite `IS` semantics (NULL-safe), never `=`.
@@ -603,7 +637,7 @@ E: audit event required? C-state change: contribution status changed?
 | Proximity conflict (≤30 m to different row) | 409 `proximity_conflict` | no | unchanged | none | — | none | owner reconciliation |
 | Canonical constraint violation at batch time | 500 | batch aborts | unchanged | none | — | none | retryable; surfaces as a planner bug to fix |
 | Provenance write attempted | impossible | no such statement exists in the promotion path | — | — | — | — | contract invariant (§9) |
-| Phase-2 (ledger/event) failure after phase-1 commit | 500 | phase 1 committed | **changed** | missing (orphan) | missing | none | reconciliation command heals ledger (§5.2, §6); response never claims success |
+| Phase-2 (ledger/event) failure after phase-1 commit | 500 | phase 1 committed | **changed** | missing (orphan) | missing | none | read-only reconciliation **detects/classifies** the orphan (§5.2, §6); an operator decides the repair; response never claims success |
 | Transient D1 unavailable | 500 | no | unchanged | none | — | none | safe retry (nothing committed) |
 
 ---
@@ -641,7 +675,10 @@ ATOMICITY — `atomicity.*`
 - `atomicity.canonical_ledger_event_commit_together`
 - `atomicity.planner_refusal_writes_nothing` (each 422/409 case: zero deltas on all three tables)
 - `atomicity.batch_abort_rolls_back` (injected CHECK failure → canonical unchanged, no ledger, no event)
-- `atomicity.phase2_orphan_reconcilable` (simulated crash → reconciliation command reconstructs ledger row from payload)
+- `atomicity.phase2_orphan_reconcilable` (simulated crash → the read-only
+  reconciliation **detects and classifies** the orphan as `suspected_orphans`
+  and writes nothing; it never reconstructs a ledger row — repair stays an
+  explicit operator action)
 
 PAYLOAD / PLAN — `payload.*`
 - `payload.arbitrary_column_unreachable`, `payload.reserved_key_unreachable`
@@ -720,16 +757,19 @@ promotion changed", because the bidet case genuinely needs it.
    cases; `pnpm test:stage13` and all regression guards still green.
 3. **Authorization seam:** `BUTTLER_PROMOTER_IDS` exists as env **name** in
    example files only; unset ⇒ endpoint fails closed (403/503 class), tested.
-4. **Reconciliation command** exists and is idempotent (the §5.2/§6 orphan
-   heal), tested in 14F.
+4. **Reconciliation command** exists, is read-only and idempotent: it detects,
+   classifies, and reports crash-window orphans (§5.2/§6) but never invents or
+   reconstructs ledger rows — any repair is an explicit, human-approved action.
+   Tested in 14F.
 5. **14H read-only readiness audit** re-verifies the audit-derived counts (§1)
    against production with SELECT-only access.
 6. **Owner approvals** (Appendix F) recorded for: applying 0006 to production,
    exposing the endpoint, deploying, and the first controlled promotion.
 7. **Backup verified** (restore-tested) before the first production promotion;
    the canonical table's pre-promotion snapshot retained.
-8. Phase-2 failure mode documented in ops runbook (orphan detection + heal),
-   because it is the one non-instantly-reversible behavior in the design.
+8. Phase-2 failure mode documented in ops runbook (read-only orphan detection
+   + the explicit, human-approved repair path), because it is the one
+   non-instantly-reversible behavior in the design.
 
 Until every gate above is green, the endpoint stays unwired and
 `applyApprovedToCanonical` stays inert — the current state, preserved.
