@@ -6,6 +6,7 @@ import Home from "@/pages/Home";
 import Contribute from "@/pages/Contribute";
 import MyContributions from "@/pages/MyContributions";
 import Moderation from "@/pages/Moderation";
+import Promotions from "@/pages/Promotions";
 import NotFound from "@/pages/not-found";
 import { InstallBanner } from "@/components/InstallBanner";
 
@@ -18,6 +19,9 @@ function Router() {
       <Route path="/contribute" component={Contribute} />
       <Route path="/my-contributions" component={MyContributions} />
       <Route path="/moderation" component={Moderation} />
+      {/* Stage 14 promotion console. Like /moderation it gates on sign-in STATE
+          and lets the server enforce the separate promoter allow-list. */}
+      <Route path="/promotions" component={Promotions} />
       <Route component={NotFound} />
     </Switch>
   );

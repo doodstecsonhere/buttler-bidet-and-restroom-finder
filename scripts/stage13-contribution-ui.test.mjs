@@ -474,6 +474,97 @@ const SUBMIT_DRAFT = validProblemDraft;
 }
 
 // ---------------------------------------------------------------------------
+// 6b. Promotion + reversal client (Stage 14 ownership completion)
+// ---------------------------------------------------------------------------
+
+{
+  // promote: POST to the /promotion sub-resource; the ONLY client field is an
+  // optional note; the executor's camelCase success echo parses to a receipt.
+  const cid = "contrib_" + "a".repeat(32);
+  const { calls, client } = harness({
+    handler: () => json({
+      promotionId: "promo_" + "b".repeat(32),
+      canonicalId: TARGET_ID,
+      changedColumns: ["fee", "access"],
+      promotedAt: "2026-10-04T00:00:00.000Z",
+    }),
+  });
+  const ok = await client.promote(cid, "  Stage14 proving run  ");
+  assert.equal(ok.ok, true);
+  assert.equal(calls[0].input, `/api/moderation/contributions/${cid}/promotion`);
+  assert.equal(calls[0].init.method, "POST");
+  assert.deepEqual(JSON.parse(calls[0].init.body), { promotion_note: "Stage14 proving run" });
+  assert.equal(ok.value.promotionId, "promo_" + "b".repeat(32));
+  assert.deepEqual(ok.value.changedColumns, ["fee", "access"]);
+
+  // A blank note serialises to null (the endpoint ignores it), never "".
+  const empty = harness();
+  await empty.client.promote(cid, "   ");
+  assert.deepEqual(JSON.parse(empty.calls[0].init.body), { promotion_note: null });
+
+  // Failure families route through the shared server-code table.
+  for (const [status, expectedCode] of [
+    [401, "auth_required"],
+    [403, "forbidden"],
+    [409, "duplicate"],
+    [503, "not_open"],
+  ]) {
+    const r = await harness({ handler: () => json({ error: "x" }, status) }).client.promote(cid, "");
+    assert.equal(r.ok, false);
+    assert.equal(r.code, expectedCode);
+  }
+
+  // A malformed success body is an honest service error, never a half-parse.
+  const bad = await harness({ handler: () => json({ nope: true }) }).client.promote(cid, "");
+  assert.equal(bad.code, "server");
+
+  // Tokenless promote never leaves the browser (the auth seam short-circuits).
+  const none = harness({ token: null });
+  const blocked = await none.client.promote(cid, "");
+  assert.equal(blocked.code, "auth_required");
+  assert.equal(none.calls.length, 0);
+}
+
+{
+  // reverse: POST to /api/moderation/promotions/{id}/reversal, body carries only
+  // an optional reversal_note; the ledger's restore result parses to a receipt.
+  const pid = "promo_" + "d".repeat(32);
+  const { calls, client } = harness({
+    handler: () => json({
+      reversalId: "promo_" + "e".repeat(32),
+      reversesPromotionId: pid,
+      canonicalId: TARGET_ID,
+      changedColumns: ["fee"],
+      restoredValues: { fee: "no" },
+      reversedAt: "2026-10-04T01:00:00.000Z",
+    }),
+  });
+  const ok = await client.reverse(pid, "restore");
+  assert.equal(ok.ok, true);
+  assert.equal(calls[0].input, `/api/moderation/promotions/${pid}/reversal`);
+  assert.equal(calls[0].init.method, "POST");
+  assert.deepEqual(JSON.parse(calls[0].init.body), { reversal_note: "restore" });
+  assert.equal(ok.value.reversesPromotionId, pid);
+  assert.deepEqual(ok.value.restoredValues, { fee: "no" });
+
+  const empty = harness();
+  await empty.client.reverse(pid, "");
+  assert.deepEqual(JSON.parse(empty.calls[0].init.body), { reversal_note: null });
+
+  for (const [status, expectedCode] of [
+    [403, "forbidden"],
+    [404, "not_found"],
+    [409, "duplicate"],
+  ]) {
+    const r = await harness({ handler: () => json({ error: "x" }, status) }).client.reverse(pid, "");
+    assert.equal(r.code, expectedCode);
+  }
+
+  const bad = await harness({ handler: () => json({}) }).client.reverse(pid, "");
+  assert.equal(bad.code, "server");
+}
+
+// ---------------------------------------------------------------------------
 // 7. Static hygiene over the new browser source (requirements 14–16 and more)
 // ---------------------------------------------------------------------------
 
@@ -484,6 +575,7 @@ const CONTRIBUTION_SOURCES = [
   "../artifacts/buttler/src/pages/Contribute.tsx",
   "../artifacts/buttler/src/pages/MyContributions.tsx",
   "../artifacts/buttler/src/pages/Moderation.tsx",
+  "../artifacts/buttler/src/pages/Promotions.tsx",
 ];
 
 const sources = new Map();
@@ -576,7 +668,7 @@ for (const path of CONTRIBUTION_SOURCES) {
   // Wiring: the three routes exist, Home links once per header, cards deep
   // link only canonical ids, and pages talk to the API only via the client.
   const app = await read("../artifacts/buttler/src/App.tsx");
-  for (const route of ["/contribute", "/my-contributions", "/moderation"]) {
+  for (const route of ["/contribute", "/my-contributions", "/moderation", "/promotions"]) {
     assert.ok(app.includes(`path="${route}"`), `route ${route} is not registered`);
   }
   const home = await read("../artifacts/buttler/src/pages/Home.tsx");
