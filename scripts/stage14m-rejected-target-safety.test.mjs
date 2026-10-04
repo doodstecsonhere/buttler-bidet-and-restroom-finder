@@ -418,11 +418,13 @@ const retiredBaseline = fullRow(retiredTarget);
   const updateAt = source.indexOf("const { sql, values } = buildGuardedUpdate(plan)");
   assert.ok(guardAt > 0 && updateAt > 0 && guardAt < updateAt, "the check precedes any canonical write");
   // The executor still exposes exactly its narrow API and holds no HTTP/env.
+  // Stage 14 ownership completion (owner-approved §18): the guarded reversal
+  // executor is one deliberate new export; nothing else widened.
   const mod = await import("../functions/_lib/canonical-promotion.ts");
   assert.deepEqual(
     Object.keys(mod).sort(),
-    ["executeCanonicalPromotion", "planAndExecuteCanonicalPromotion", "reconcileCanonicalPromotions"],
-    "no new public surface",
+    ["executeCanonicalPromotion", "executeCanonicalPromotionReversal", "planAndExecuteCanonicalPromotion", "reconcileCanonicalPromotions"],
+    "the only new public surface is the §18 reversal executor",
   );
   const executable = source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/[^\n]*/g, "");
   assert.ok(!/process\.env|ctx\.env/.test(executable), "executor reads no environment");

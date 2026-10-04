@@ -1107,7 +1107,8 @@ const COORD_EVIDENCE = [{ type: "field_observation", detail: "verified the reloc
 }
 
 // ===========================================================================
-// 12. Phase 15 — the 0006 schema contract holds on this database.
+// 12. Phase 15 — the 0006 schema contract (+ the 0009 reversal index swap)
+//     holds on this database.
 // ===========================================================================
 {
   const columns = sqlite.prepare("PRAGMA table_info(canonical_promotions)").all().map((c) => c.name);
@@ -1117,14 +1118,45 @@ const COORD_EVIDENCE = [{ type: "field_observation", detail: "verified the reloc
     "resulting_values_json", "status", "reversal_of", "promotion_note",
   ]);
   const indexes = sqlite.prepare("PRAGMA index_list(canonical_promotions)").all();
-  assert.ok(indexes.some((i) => i.unique === 1 && sqlite.prepare(`PRAGMA index_info('${i.name}')`).all().some((c) => c.name === "contribution_id")), "UNIQUE(contribution_id) replay gate exists");
+  // Stage 14 ownership completion (migration 0009, owner-approved): the
+  // §5.2 UNIQUE(contribution_id) index became a plain index so a §18 reversal
+  // can append a second ledger row for the same contribution. Duplicate-
+  // PROMOTION protection now lives in this executor: the phase-4 replay
+  // pre-check (already_promoted) plus the planner's redundant_noop gate —
+  // both exercised above — and the single-transaction db.batch() phase-2
+  // write. An index on the column must still exist (query performance + the
+  // historical lookup path).
+  const contributionIndex = indexes.find(
+    (i) => sqlite.prepare(`PRAGMA index_info('${i.name}')`).all().some((c) => c.name === "contribution_id")
+      && sqlite.prepare(`PRAGMA index_info('${i.name}')`).all().length === 1,
+  );
+  assert.ok(contributionIndex, "an index on (contribution_id) exists after 0009");
+  assert.equal(contributionIndex.unique, 0, "0009 relaxed UNIQUE(contribution_id) so §18 reversals can append");
 
   const anyPromotion = sqlite.prepare("SELECT contribution_id, canonical_id, kind, contributor_user_id, promoter_user_id, base_snapshot_json, changed_columns_json, resulting_values_json FROM canonical_promotions LIMIT 1").get();
+  // The executor-level gate: re-running the SAME promotion through the
+  // executor after it has been applied is refused (already_promoted or
+  // planner redundant_noop) and appends no second row — proven in section 4
+  // (racing attempts) and section 11 (wrapper replay) above. The direct-SQL
+  // probe below now instead proves what 0009 intentionally ALLOWS: a second
+  // row for one contribution — but ONLY one linked as a reversal. A plain
+  // duplicate promotion inserted by rogue SQL would be caught by
+  // reconciliation, not the index; that trade-off is the owner-approved
+  // consequence of shipping §18 reversal.
+  const appended = sqlite.prepare(
+    `INSERT INTO canonical_promotions (promotion_id, contribution_id, canonical_id, kind, contributor_user_id, promoter_user_id, base_snapshot_json, changed_columns_json, resulting_values_json, status, reversal_of) ` +
+    `SELECT 'promo_' || ?, contribution_id, canonical_id, kind, contributor_user_id, promoter_user_id, base_snapshot_json, changed_columns_json, resulting_values_json, 'promoted', promotion_id FROM canonical_promotions LIMIT 1`,
+  ).run("3".repeat(32));
+  assert.equal(appended.changes, 1, "0009: a reversal_of-linked second ledger row for one contribution is insertable (§18)");
+  // Self-referencing FK + the append-only rule still hold: an UNLINKED
+  // second row is application territory, but a reversal pointing at a
+  // nonexistent promotion is still a hard FK failure.
   assert.throws(() =>
     sqlite.prepare(
-      `INSERT INTO canonical_promotions (promotion_id, contribution_id, canonical_id, kind, contributor_user_id, promoter_user_id, base_snapshot_json, changed_columns_json, resulting_values_json) VALUES ('promo_' || '00000000000000000000000000000000', ?, ?, ?, 'x', 'y', '{}', '[]', '{}')`,
+      `INSERT INTO canonical_promotions (promotion_id, contribution_id, canonical_id, kind, contributor_user_id, promoter_user_id, base_snapshot_json, changed_columns_json, resulting_values_json, reversal_of) VALUES ('promo_' || '44444444444444444444444444444444', ?, ?, ?, 'x', 'y', '{}', '[]', '{}', 'promo_' || 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa')`,
     ).run(anyPromotion.contribution_id, anyPromotion.canonical_id, anyPromotion.kind),
-  /UNIQUE/i, "a second ledger row for one contribution is impossible at the DB level");
+  /FOREIGN KEY/i, "reversal_of still must reference a real promotion");
+  sqlite.prepare("DELETE FROM canonical_promotions WHERE promotion_id = ?").run("promo_" + "3".repeat(32));
   assert.throws(() =>
     sqlite.prepare(
       `INSERT INTO canonical_promotions (promotion_id, contribution_id, canonical_id, kind, contributor_user_id, promoter_user_id, base_snapshot_json, changed_columns_json, resulting_values_json, status) VALUES ('promo_' || '11111111111111111111111111111111', 'contrib_' || '22222222222222222222222222222222', ?, 'access_update', 'x', 'y', '{}', '[]', '{}', 'reversed')`,
@@ -1144,8 +1176,8 @@ const COORD_EVIDENCE = [{ type: "field_observation", detail: "verified the reloc
   const mod = await import("../functions/_lib/canonical-promotion.ts");
   assert.deepEqual(
     Object.keys(mod).sort(),
-    ["executeCanonicalPromotion", "planAndExecuteCanonicalPromotion", "reconcileCanonicalPromotions"],
-    "the executor exposes exactly its narrow API",
+    ["executeCanonicalPromotion", "executeCanonicalPromotionReversal", "planAndExecuteCanonicalPromotion", "reconcileCanonicalPromotions"],
+    "the executor exposes exactly its narrow API (the one §18 reversal executor added by the ownership completion is the sole new export)",
   );
   // Enumerate every file under functions/api for the endpoint-scope guard below.
   const walk = (dir, seen = []) => {
@@ -1158,14 +1190,15 @@ const COORD_EVIDENCE = [{ type: "field_observation", detail: "verified the reloc
   };
   const apiFiles = walk(new URL("../functions/api", import.meta.url).pathname.replace(/^\//, ""));
   // Stage 14D asserted no promotion endpoint existed. Stage 14E legitimately
-  // adds exactly ONE thin HTTP boundary; the durable invariant is that the
-  // EXECUTOR above still contains none of that surface (§4/§15 guards) and the
-  // endpoint is a separate, dedicated route. Pin it to the single 14E file
-  // rather than forbidding its existence.
+  // adds exactly ONE thin HTTP boundary; the Stage 14 ownership completion
+  // (owner-approved §18) adds ONE more thin boundary for reversal. The durable
+  // invariant is that the EXECUTOR above still contains none of that surface
+  // (§4/§15 guards) and each endpoint is a separate, dedicated route. Pin the
+  // set to those two files rather than forbidding them.
   assert.deepEqual(
     apiFiles.filter((f) => /promotion/i.test(f)).map((f) => f.split(/[\\/]/).pop()).sort(),
-    ["promotion.ts"],
-    "the only promotion endpoint is the single Stage 14E boundary route (executor stays HTTP-free)",
+    ["promotion.ts", "reversal.ts"],
+    "the only promotion-named endpoints are the 14E boundary + the §18 reversal boundary (executor stays HTTP-free)",
   );
   // No DELETE / INSERT into canonical / provenance writes in the executor.
   // Strip block comments and line comments so guards scan executable code only.

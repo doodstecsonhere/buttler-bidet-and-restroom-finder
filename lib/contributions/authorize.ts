@@ -151,6 +151,36 @@ export function authorizeCanonicalPromotion(
   return { ok: true };
 }
 
+// Stage 14 ownership completion — reversal authorization (contract §18).
+// A reversal is promoter-gated and authenticated, exactly like a promotion,
+// so the allow-list and identity rules are IDENTICAL to
+// `authorizeCanonicalPromotion`. The one deliberate difference is that the
+// no-self rule does NOT apply: reversal never rewrites history and restores
+// the guarded pre-promotion snapshot, so a promoter who happens to also be
+// the contributor may still reverse their own promoted change — the
+// safeguard there is §18's drift refusal (`superseded_by_later_edit`), not
+// identity separation. Which promotion exists, whether its canonical row
+// still matches its resulting values, and whether it was already reversed
+// are the executor's questions, not this predicate's.
+export type ReversalAuthzResult = PromotionAuthzResult;
+
+export function authorizePromotionReversal(
+  identity: Identity | null,
+  promoterUserIds: readonly string[],
+): ReversalAuthzResult {
+  if (!identity) {
+    return { ok: false, status: 401, error: "authentication required", code: "authentication_required" };
+  }
+  if (typeof identity.userId !== "string" || identity.userId.length === 0) {
+    return { ok: false, status: 401, error: "authenticated identity has no subject", code: "identity_missing" };
+  }
+  // Exact comparison only — same fail-closed semantics as promotion.
+  if (!promoterUserIds.includes(identity.userId)) {
+    return { ok: false, status: 403, error: "promoter authorization required", code: "promoter_required" };
+  }
+  return { ok: true };
+}
+
 // Contributor-side withdrawal: own submission, and only from a pre-terminal
 // state.
 export function authorizeWithdraw(
