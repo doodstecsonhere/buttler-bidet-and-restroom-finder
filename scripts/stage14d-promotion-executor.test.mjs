@@ -123,12 +123,21 @@ const canonicalBaseline = new Map(
 const provenanceBaseline = JSON.stringify(
   sqlite.prepare("SELECT * FROM location_provenance ORDER BY canonical_id, source_link_id").all(),
 );
+// Stage 14M: the seeded rejected-lineage row, captured before any test runs,
+// so the suite can prove the promotion path never touches it.
+const pulantubigBaselineRow = JSON.stringify(
+  sqlite.prepare("SELECT * FROM canonical_locations WHERE canonical_id = ?").get("buttler_loc_a962aa157dff936ae36a"),
+);
 const legacyBaseline = JSON.stringify(
   sqlite.prepare("SELECT * FROM restroom_locations ORDER BY rowid").all(),
 );
 
 // Canonical rows our tests are allowed to differ from baseline at the end.
 const touchedIds = new Set();
+// Stage 14M: the disposable row deliberately retired to rejected lineage.
+let rejectedTargetId = null;
+let rejectedContributionId = null;
+let sectionContribs = 0;
 // The deliberately crashed promotion (section 10), captured for the final
 // integrity report (section 14).
 let crashOrphanId = null;
@@ -136,10 +145,14 @@ let crashOrphanId = null;
 // cannot distinguish from orphans by design (see §Phase 10 limitations).
 const coincidentalOrphanIds = new Set();
 
-function unsurveyedTargets(n) {
+function unsurveyedTargets(n, { excludeRejected = false } = {}) {
+  // Stage 14M: the guard retires a row from the ACTIVE dataset, so a suite that
+  // needs promotable targets must not silently pick one up. The seed itself
+  // stays active until the 14M section retires its own disposable row.
   const rows = sqlite
     .prepare(
-      `SELECT canonical_id AS id FROM canonical_locations WHERE bidet_source_id IS NULL ORDER BY canonical_id LIMIT ?`,
+      `SELECT canonical_id AS id FROM canonical_locations WHERE bidet_source_id IS NULL ` +
+      `${excludeRejected ? "AND record_status <> 'rejected' " : ""}ORDER BY canonical_id LIMIT ?`,
     )
     .all(n)
     .map((r) => r.id);
@@ -703,6 +716,267 @@ const COORD_EVIDENCE = [{ type: "field_observation", detail: "verified the reloc
 }
 
 // ===========================================================================
+// 9A. Stage 14M — rejected canonical targets can never be promoted. A
+//     rejected row is retained lineage (the Stage 14K Pulantubig merge pattern),
+//     not part of the ACTIVE canonical dataset, so the executor must refuse it
+//     at the data-integrity boundary — explicitly, machine-readably, and
+//     without writing anything.
+// ===========================================================================
+{
+  const target = unsurveyedTargets(17)[16];
+  rejectedTargetId = target;
+  prepTarget(target);
+  const untouchedBaseline = getCanonical(target);
+  sqlite.prepare(`UPDATE canonical_locations SET record_status = 'rejected' WHERE canonical_id = ?`).run(target);
+  const rejectedBefore = sqlite
+    .prepare("SELECT * FROM canonical_locations WHERE canonical_id = ?")
+    .get(target);
+  const ledgerBefore = ledgerCount();
+  const eventsBefore = count("SELECT count(*) AS c FROM contribution_events");
+  const contribsBefore = count("SELECT count(*) AS c FROM contributions");
+
+  const contributionId = insertContribution({ kind: "access_update", target, payload: { access: "public" } });
+  rejectedContributionId = contributionId;
+  sectionContribs += 1;
+  // A plan built from a row that no longer belongs to the active dataset. The
+  // planner itself has no notion of record_status (planner policy is unchanged
+  // in Stage 14M), which is exactly why the guard must sit in the executor.
+  const plan = buildPlan(contributionId);
+
+  // A rejected target is refused with its own reason, not silently treated as
+  // a missing row.
+  const refused = failWith(await executeCanonicalPromotion(db, {
+    contributionId,
+    plan,
+    promoterUserId: PROMOTER,
+  }));
+  assert.equal(refused.reason, "canonical_target_rejected", "explicit machine-readable refusal");
+  assert.equal(refused.details.canonical_id, target);
+  assert.equal(refused.details.record_status, "rejected", "the stored status is reported back");
+
+  // The authoritative entry point refuses it too, before any plan is built.
+  const viaEntry = failWith(await planAndExecuteCanonicalPromotion(db, {
+    contributionId,
+    promoterUserId: PROMOTER,
+  }));
+  assert.equal(viaEntry.reason, "canonical_target_rejected");
+
+  // Nothing was written anywhere: canonical, ledger, audit events.
+  assert.deepEqual(getCanonical(target), untouchedBaseline, "rejected row values untouched");
+  assert.equal(JSON.stringify(sqlite.prepare("SELECT * FROM canonical_locations WHERE canonical_id = ?").get(target)), JSON.stringify(rejectedBefore), "not even record_status moved");
+  assert.equal(ledgerFor(contributionId), undefined, "no ledger row for a refused rejected-target promotion");
+  assert.equal(ledgerCount(), ledgerBefore, "the ledger gained nothing");
+  assert.equal(promotionEvents(contributionId).length, 0, "no audit event for the refused promotion");
+  assert.equal(count("SELECT count(*) AS c FROM contribution_events"), eventsBefore, "the event table is untouched");
+
+  // A caller cannot steer the guard with its own copy of record_status. The
+  // plan type carries no such field, so a forged one is dead weight; the
+  // server-side stored row decides. (It never reaches SQL: the guarded UPDATE
+  // is built from the frozen seven-column allow-list, and a plan that names
+  // record_status as a changed column is refused as a smuggle — see section 9.)
+  const forged = { ...plan, record_status: "verified" };
+  assert.equal(failWith(await executeCanonicalPromotion(db, {
+    contributionId,
+    plan: forged,
+    promoterUserId: PROMOTER,
+  })).reason, "canonical_target_rejected", "a smuggled record_status is not trusted");
+  assert.equal(
+    failWith(await executeCanonicalPromotion(db, {
+      contributionId,
+      plan: { ...forged, changed_columns: ["record_status"], resulting_values: { record_status: "verified" } },
+      promoterUserId: PROMOTER,
+    })).reason,
+    "invalid_plan",
+    "record_status is not a writable canonical column",
+  );
+
+  // Re-tagging a rejected row as active in the plan changes nothing: the guard
+  // re-reads `record_status` from the stored row on every attempt, so a caller
+  // has no input through which to flip a retired record back into the active
+  // dataset. (A plan whose target disagrees with the stored contribution is
+  // refused as `invalid_plan` — the existing section-9 smuggle matrix covers
+  // that path; nothing here needs to weaken it.)
+  assert.equal(
+    failWith(await executeCanonicalPromotion(db, {
+      contributionId,
+      plan: { ...plan, record_status: "candidate", base_snapshot: { ...plan.base_snapshot, access: "unknown" } },
+      promoterUserId: PROMOTER,
+    })).reason,
+    "canonical_target_rejected",
+    "the stored row, not the caller, decides activation",
+  );
+  // Smuggling a rejected id as somebody else's target cannot redirect a
+  // promotion onto lineage: the stored contribution owns the target, so the
+  // mismatch is refused before any read of the forged id matters.
+  const [redirectTarget] = unsurveyedTargets(18, { excludeRejected: true });
+  prepTarget(redirectTarget);
+  const redirectContrib = insertContribution({ kind: "access_update", target: redirectTarget, payload: { access: "public" } });
+  sectionContribs += 1;
+  const redirected = failWith(await executeCanonicalPromotion(db, {
+    contributionId: redirectContrib,
+    plan: { ...buildPlan(redirectContrib), canonical_id: target },
+    promoterUserId: PROMOTER,
+  }));
+  assert.equal(redirected.reason, "invalid_plan", "a plan cannot retarget onto a rejected row");
+  assert.equal(getCanonical(redirectTarget).access, "unknown", "the redirection wrote nothing");
+  assert.equal(ledgerFor(redirectContrib), undefined, "and left no ledger row");
+
+  assert.equal(
+    sqlite.prepare("SELECT record_status FROM canonical_locations WHERE canonical_id = ?").get(target).record_status,
+    "rejected",
+    "the rejected row is still rejected",
+  );
+
+  // Only the ACTIVE dataset is promotable: every other status in the schema
+  // domain keeps working through the same harness.
+  for (const status of ["candidate", "community-submitted", "verified", "disputed", "outdated"]) {
+    const [t] = unsurveyedTargets(19, { excludeRejected: true });
+    prepTarget(t);
+    sqlite.prepare("UPDATE canonical_locations SET record_status = ? WHERE canonical_id = ?").run(status, t);
+    const c = insertContribution({ kind: "access_update", target: t, payload: { access: "public" } });
+    sectionContribs += 1;
+    const res = await planAndExecuteCanonicalPromotion(db, { contributionId: c, promoterUserId: PROMOTER });
+    assert.equal(res.ok, true, `${status} stays promotable: ${JSON.stringify(res)}`);
+    assert.equal(getCanonical(t).access, "public");
+    sqlite.prepare("UPDATE canonical_locations SET record_status = 'candidate' WHERE canonical_id = ?").run(t);
+  }
+
+  // The real retired record from the dataset — the Stage 14K Pulantubig
+  // duplicate — is refused too. Read-only: nothing about it is written.
+  const PULANTUBIG_DUPLICATE = "buttler_loc_a962aa157dff936ae36a";
+  const pulantubigBefore = sqlite.prepare("SELECT * FROM canonical_locations WHERE canonical_id = ?").get(PULANTUBIG_DUPLICATE);
+  assert.equal(pulantubigBefore.record_status, "rejected", "fixture: the merged duplicate is rejected lineage");
+  const pulantubigContrib = insertContribution({ kind: "access_update", target: PULANTUBIG_DUPLICATE, payload: { access: "restricted" } });
+  sectionContribs += 1;
+  const pulantubig = failWith(await planAndExecuteCanonicalPromotion(db, {
+    contributionId: pulantubigContrib,
+    promoterUserId: PROMOTER,
+  }));
+  assert.equal(pulantubig.reason, "canonical_target_rejected");
+  assert.equal(pulantubig.details.canonical_id, PULANTUBIG_DUPLICATE);
+  assert.deepEqual(sqlite.prepare("SELECT * FROM canonical_locations WHERE canonical_id = ?").get(PULANTUBIG_DUPLICATE), pulantubigBefore, "the retired row was not modified");
+  assert.equal(ledgerFor(pulantubigContrib), undefined, "no ledger row against the retired row");
+
+  // The guard reads the STORED row, not the snapshot: an up-to-date plan with
+  // no drift at all is still refused, and a stale one is refused for the
+  // activation reason rather than drift.
+  const currentRow = getCanonical(target);
+  const freshSnapshotPlan = {
+    ...plan,
+    base_snapshot: {
+      updated_at: currentRow.updated_at,
+      access: currentRow.access,
+      fee: currentRow.fee,
+      bidet_presence: currentRow.bidet_presence,
+      name: currentRow.name,
+      address: currentRow.address,
+      latitude: currentRow.latitude,
+      longitude: currentRow.longitude,
+    },
+  };
+  assert.equal(failWith(await executeCanonicalPromotion(db, {
+    contributionId,
+    plan: freshSnapshotPlan,
+    promoterUserId: PROMOTER,
+  })).reason, "canonical_target_rejected", "a perfectly matching plan still cannot promote lineage");
+  const stalePlan = { ...plan, base_snapshot: { ...plan.base_snapshot, updated_at: "2020-01-01T00:00:00.000Z" } };
+  assert.equal(failWith(await executeCanonicalPromotion(db, {
+    contributionId,
+    plan: stalePlan,
+    promoterUserId: PROMOTER,
+  })).reason, "canonical_target_rejected", "activation is checked before drift");
+
+  // Existing gates keep their precedence and still write nothing.
+  const replayContrib = insertContribution({ kind: "fee_update", target, payload: { fee: "yes" } });
+  sectionContribs += 1;
+  const replayPlan = buildPlan(replayContrib);
+  const brokenLedgerDb = makeD1(sqlite, { failBatchOnce: true });
+  assert.equal(failWith(await executeCanonicalPromotion(brokenLedgerDb, { contributionId: replayContrib, plan: replayPlan, promoterUserId: PROMOTER })).reason, "canonical_target_rejected", "refused before the replay gate matters");
+  assert.equal(ledgerFor(replayContrib), undefined);
+
+  assert.equal(count("SELECT count(*) AS c FROM contributions"), contribsBefore + sectionContribs, "this section only added its own disposable contributions");
+  assert.equal(
+    count("SELECT count(*) AS c FROM canonical_locations"),
+    baselineCanonical + 1,
+    "the guard inserts and deletes no canonical rows",
+  );
+}
+
+// ===========================================================================
+// 9B. Stage 14M — how the new guard interacts with the gates that already
+//     exist. The active-target check is additive: it never weakens CAS drift,
+//     never swallows the planner's own policy refusals, and never turns a
+//     genuinely missing target into a "rejected" answer.
+// ===========================================================================
+{
+  const rejected = rejectedTargetId;
+  const contributionId = rejectedContributionId;
+
+  // A missing canonical row is still "not found", and a retired one is still
+  // "rejected" — the two reasons stay distinguishable. (The FK on
+  // contributions.target_canonical_id forbids inventing a claim against an
+  // absent row, so the absence case is probed straight through the executor.)
+  const ghost = "buttler_loc_" + "d".repeat(20);
+  const rejectedPlan = buildPlan(contributionId);
+  assert.equal(sqlite.prepare("SELECT canonical_id FROM canonical_locations WHERE canonical_id = ?").get(ghost), undefined, "fixture: the ghost id is absent");
+  const missingResult = failWith(await executeCanonicalPromotion(db, {
+    contributionId,
+    plan: { ...rejectedPlan, canonical_id: ghost },
+    promoterUserId: PROMOTER,
+  }));
+  assert.ok(
+    ["invalid_plan", "canonical_target_not_found"].includes(missingResult.reason),
+    `an absent target cannot be reported as rejected lineage (got ${missingResult.reason})`,
+  );
+  assert.equal(
+    failWith(await executeCanonicalPromotion(db, {
+      contributionId,
+      plan: { ...rejectedPlan, canonical_id: rejected },
+      promoterUserId: PROMOTER,
+    })).reason,
+    "canonical_target_rejected",
+    "the rejected id is resolved against the stored row",
+  );
+
+  // Guard-vs-policy precedence: with the rejected row in a bidet-eligible
+  // state, the executor still refuses on activation rather than running the
+  // §8 check against retired lineage. Nothing is written either way.
+  sqlite.prepare(`UPDATE canonical_locations SET bidet_presence = 'Yes', updated_at = ? WHERE canonical_id = ?`).run(STAMP, rejected);
+  const downgrade = insertContribution({ kind: "bidet_report", target: rejected, payload: { bidet_presence: "Unknown" } });
+  const dgRefused = failWith(await planAndExecuteCanonicalPromotion(db, {
+    contributionId: downgrade, promoterUserId: PROMOTER,
+  }));
+  assert.equal(dgRefused.reason, "canonical_target_rejected", "activation is checked before write policy");
+  assert.equal(getCanonical(rejected).bidet_presence, "Yes", "the downgrading promotion wrote nothing");
+
+  // Guard-vs-CAS precedence: a stale snapshot for a rejected row is refused on
+  // activation, so drift reporting cannot be used to probe or push lineage back
+  // into the active set.
+  const current = getCanonical(rejected);
+  const casDrift = insertContribution({ kind: "access_update", target: rejected, payload: { access: "restricted" } });
+  const casDriftPlan = buildPlan(casDrift);
+  const driftRefused = failWith(await executeCanonicalPromotion(db, {
+    contributionId: casDrift,
+    plan: { ...casDriftPlan, base_snapshot: { ...casDriftPlan.base_snapshot, updated_at: "1999-01-01T00:00:00.000Z" } },
+    promoterUserId: PROMOTER,
+  }));
+  assert.equal(driftRefused.reason, "canonical_target_rejected", "rejected target never reaches the CAS UPDATE");
+  assert.equal(getCanonical(rejected).access, current.access, "no CAS write against lineage");
+  assert.equal(ledgerFor(casDrift), undefined);
+
+  // The planner keeps its own policy refusals for active rows — the guard did
+  // not move them or soften them.
+  const [{ id: surveyedId }] = sqlite.prepare("SELECT canonical_id AS id FROM canonical_locations WHERE bidet_source_id IS NOT NULL ORDER BY canonical_id LIMIT 1").all();
+  const surveyed = getCanonical(surveyedId);
+  const downgradeSurveyed = insertContribution({ kind: "bidet_report", target: surveyedId, payload: { bidet_presence: "Unknown" } });
+  const svRefused = failWith(await planAndExecuteCanonicalPromotion(db, {
+    contributionId: downgradeSurveyed, promoterUserId: PROMOTER,
+  }));
+  assert.equal(svRefused.reason, "bidet_survey_conflict", "surveyed-row policy unchanged for an ACTIVE target");
+  assert.deepEqual(getCanonical(surveyedId), surveyed, "surveyed row untouched");
+}
+
+// ===========================================================================
 // 10. Phase 14 — failure and crash-window tests with fault injection.
 // ===========================================================================
 {
@@ -909,6 +1183,18 @@ const COORD_EVIDENCE = [{ type: "field_observation", detail: "verified the reloc
 //     canonical rows differ, no orphan beyond the injected crash fixture.
 // ===========================================================================
 {
+  // Stage 14M: the retired Pulantubig duplicate must still be exactly what the
+  // Stage 14K migration left it — the executor never promoted or edited it.
+  assert.equal(
+    JSON.stringify(sqlite.prepare("SELECT * FROM canonical_locations WHERE canonical_id = ?").get("buttler_loc_a962aa157dff936ae36a")),
+    pulantubigBaselineRow,
+    "the seeded rejected row is byte-identical to its pre-suite state",
+  );
+  assert.equal(
+    count("SELECT count(*) AS c FROM canonical_locations WHERE record_status = 'rejected'"),
+    2,
+    "rejected lineage = the seeded Pulantubig duplicate + this suite's one disposable row",
+  );
   assert.equal(
     count("SELECT count(*) AS c FROM canonical_locations"),
     baselineCanonical + 1,
@@ -934,6 +1220,9 @@ const COORD_EVIDENCE = [{ type: "field_observation", detail: "verified the reloc
     .all();
   const changed = current.filter((row) => JSON.stringify(canonicalBaseline.get(row.canonical_id)) !== JSON.stringify(row));
   const unexpected = changed.filter((row) => !touchedIds.has(row.canonical_id));
+  // Stage 14M retires one disposable row to rejected lineage. That is a
+  // record_status change only — the values compared above stay untouched.
+  if (rejectedTargetId) touchedIds.add(rejectedTargetId);
   assert.deepEqual(unexpected.map((r) => r.canonical_id), [], "no canonical row outside the tested set was modified");
 
   const finalReport = await reconcileCanonicalPromotions(db);

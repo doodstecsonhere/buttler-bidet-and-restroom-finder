@@ -145,12 +145,18 @@ const canonicalBaseline = new Map(
 const touchedIds = new Set();
 
 const STAMP = "2026-01-01T00:00:00.000Z";
-function unsurveyedTargets(n) {
+function unsurveyedTargets(n, { excludeRejected = false } = {}) {
+  // Stage 14M: the pool of promotable targets must never silently include a
+  // row retired from the ACTIVE catalogue.
   const rows = sqlite.prepare(
-    "SELECT canonical_id AS id FROM canonical_locations WHERE bidet_source_id IS NULL ORDER BY canonical_id LIMIT ?",
+    `SELECT canonical_id AS id FROM canonical_locations WHERE bidet_source_id IS NULL ` +
+    `${excludeRejected ? "AND record_status <> 'rejected' " : ""}ORDER BY canonical_id LIMIT ?`,
   ).all(n).map((r) => r.id);
   assert.ok(rows.length >= n, "need unsurveyed targets");
   return rows;
+}
+function getFullCanonical(id) {
+  return sqlite.prepare("SELECT * FROM canonical_locations WHERE canonical_id = ?").get(id);
 }
 function prepAccessUnknown(id) {
   touchedIds.add(id);
@@ -524,6 +530,118 @@ const approvedA1 = await makeContribution("access_update", T1, { access: "public
   eq("H GET => 405", (await callPromote(null, approvedA1, { method: "GET" })).status, 405);
   const noAuth = baseEnv(); delete noAuth.AUTH0_DOMAIN;
   eq("H auth-not-configured => 503", (await callPromote(await tokenFor(PROMOTER), approvedA1, { env: noAuth })).status, 503);
+}
+
+// ===========================================================================
+// Stage 14M — the HTTP boundary can never promote a rejected canonical row,
+// and no request-body field can steer that decision. The guard lives in the
+// executor (functions/_lib/canonical-promotion.ts), not in this route: the
+// server-side stored canonical row stays authoritative.
+// ===========================================================================
+{
+  const rejectedTarget = unsurveyedTargets(17)[16];
+  touchedIds.add(rejectedTarget);
+  prepAccessUnknown(rejectedTarget);
+  sqlite.prepare(`UPDATE canonical_locations SET record_status = 'rejected' WHERE canonical_id = ?`).run(rejectedTarget);
+  const rejectedBefore = JSON.stringify(getFullCanonical(rejectedTarget));
+
+  // A bidet_report on the same target does not collide with the store's
+  // open-duplicate guard, which is per (target, kind).
+  const rejContrib = await makeContribution("bidet_report", rejectedTarget, { bidet_presence: "Yes" }, { approve: true });
+  const tok = await tokenFor(PROMOTER);
+
+  // 1. A plain, well-formed request against retired lineage is refused.
+  const r1 = await callPromote(tok, rejContrib);
+  eq("14M rejected target => 409", r1.status, 409);
+  eq("14M machine-readable code", r1.json.code, "canonical_target_rejected");
+  okTrue("14M details name the retired row", r1.json.details?.canonical_id === rejectedTarget && r1.json.details?.record_status === "rejected");
+
+  // 2. Smuggling every field that could conceivably matter — including a body
+  //    that re-tags the row as active — changes nothing. The body is ignored
+  //    except `promotion_note`, and the note cannot reach promotion intent.
+  const smuggleBody = {
+    record_status: "candidate",
+    canonical_id: rejectedTarget,
+    kind: "bidet_report",
+    changed_columns: ["bidet_presence"],
+    resulting_values: { bidet_presence: "Yes" },
+    base_snapshot: { access: "unknown", bidet_presence: "Unknown", updated_at: STAMP },
+    snapshot: { access: "unknown" },
+    promoter_user_id: PROMOTER,
+    contributor_user_id: "auth0|someone-else",
+    target_canonical_id: rejectedTarget,
+    promotion_note: "re-activate this retired record",
+  };
+  // Padded to exceed the ordinary payload shape without tripping the 16 KB
+  // body cap — a large body must still be refused for the same reason, not
+  // accepted because the route gave up parsing it.
+  smuggleBody._pad = "x".repeat(4096);
+  const r2 = await callPromote(tok, rejContrib, { body: smuggleBody });
+  eq("14M smuggled body => same 409", r2.status, 409);
+  eq("14M smuggled body code", r2.json.code, "canonical_target_rejected");
+  eq("14M smuggled note is not an excuse to write", count("SELECT count(*) AS c FROM canonical_promotions WHERE contribution_id = ?", rejContrib), 0);
+
+  // 3. Nothing was written anywhere: canonical, ledger, audit trail.
+  eq("14M rejected row byte-identical", JSON.stringify(getFullCanonical(rejectedTarget)), rejectedBefore);
+  eq("14M no ledger row", count("SELECT count(*) AS c FROM canonical_promotions WHERE canonical_id = ?", rejectedTarget), 0);
+  eq("14M no promotion audit event", count("SELECT count(*) AS c FROM contribution_events WHERE contribution_id = ? AND event_type = 'status_change'", rejContrib), 0);
+
+  // 4. The seeded lineage row from the Stage 14K merge is refused too — the
+  //    same rule that protects the local dataset protects the real retired id.
+  const PULANTUBIG_DUPLICATE = "buttler_loc_a962aa157dff936ae36a";
+  eq("14M fixture: the merged duplicate is rejected lineage", getFullCanonical(PULANTUBIG_DUPLICATE).record_status, "rejected");
+  const pulantubigBefore = JSON.stringify(getFullCanonical(PULANTUBIG_DUPLICATE));
+  const rejPulantubig = await makeContribution("bidet_report", PULANTUBIG_DUPLICATE, { bidet_presence: "Yes" }, { approve: true });
+  const r4 = await callPromote(tok, rejPulantubig);
+  eq("14M Pulantubig duplicate => 409", r4.status, 409);
+  eq("14M Pulantubig code", r4.json.code, "canonical_target_rejected");
+  eq("14M Pulantubig row untouched", JSON.stringify(getFullCanonical(PULANTUBIG_DUPLICATE)), pulantubigBefore);
+  eq("14M Pulantubig left no ledger row", count("SELECT count(*) AS c FROM canonical_promotions WHERE canonical_id = ?", PULANTUBIG_DUPLICATE), 0);
+
+  // 5. An ACTIVE target still promotes normally through the same route — the
+  //    guard is narrow and did not disable the feature.
+  const activeTarget = unsurveyedTargets(18, { excludeRejected: true })[17];
+  prepAccessUnknown(activeTarget);
+  const okContrib = await makeContribution("access_update", activeTarget, { access: "public" }, { approve: true });
+  const r5 = await callPromote(tok, okContrib);
+  eq("14M active target still promotes => 200", r5.status, 200);
+  eq("14M active target promoted", sqlite.prepare("SELECT access FROM canonical_locations WHERE canonical_id = ?").get(activeTarget).access, "public");
+
+  // 6. Every other status in the schema domain stays promotable, so only the
+  //    documented activation value retired a record.
+  const statusPool = unsurveyedTargets(20, { excludeRejected: true });
+  let statusCursor = 12; // indices 0-11 are the earlier fixtures
+  for (const status of ["candidate", "community-submitted", "verified", "disputed", "outdated"]) {
+    const t = statusPool[statusCursor];
+    statusCursor += 1;
+    assert.ok(t && t !== rejectedTarget && t !== activeTarget, "distinct status-fixture target");
+    prepAccessUnknown(t);
+    sqlite.prepare("UPDATE canonical_locations SET record_status = ? WHERE canonical_id = ?").run(status, t);
+    const c = await makeContribution("access_update", t, { access: "public" }, { approve: true });
+    const res = await callPromote(tok, c);
+    eq(`14M ${status} still promotable => 200`, res.status, 200);
+    sqlite.prepare("UPDATE canonical_locations SET record_status = 'candidate' WHERE canonical_id = ?").run(t);
+  }
+}
+
+// ===========================================================================
+// Stage 14M — architecture guard: the refusal lives at the executor boundary,
+// not in this thin route. A future alternate caller therefore cannot bypass it
+// by calling the executor directly, and this route holds no policy of its own.
+// ===========================================================================
+{
+  const routeSource = readFileSync(
+    new URL("../functions/api/moderation/contributions/[id]/promotion.ts", import.meta.url),
+    "utf8",
+  ).replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/[^\n]*/g, "");
+  const executorSource = readFileSync(
+    new URL("../functions/_lib/canonical-promotion.ts", import.meta.url),
+    "utf8",
+  );
+  okTrue("14M route contains no record_status policy", !/record_status/.test(routeSource));
+  okTrue("14M route contains no canonical SELECT", !/canonical_locations/.test(routeSource));
+  okTrue("14M executor reads record_status from the stored row", /record_status FROM canonical_locations/.test(executorSource));
+  okTrue("14M executor refuses it before the guarded UPDATE", /canonical_target_rejected/.test(executorSource));
 }
 
 // ===========================================================================

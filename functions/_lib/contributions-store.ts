@@ -393,6 +393,10 @@ function promotionFailure(result: {
     case "proximity_conflict":
     case "bidet_downgrade_forbidden":
     case "bidet_survey_conflict":
+    // Stage 14M: the target exists but is rejected lineage. Not a 404 — the
+    // row is real data, it is simply outside the active canonical dataset, so
+    // this is the same class of "refused, changes nothing" conflict as drift.
+    case "canonical_target_rejected":
       status = 409;
       break;
     case "address_blank":

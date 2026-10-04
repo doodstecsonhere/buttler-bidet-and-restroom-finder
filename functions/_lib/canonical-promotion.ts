@@ -22,6 +22,14 @@
 //     Stage 14C's (`planCanonicalPromotion`); this file consumes a plan,
 //     revalidates it against stored rows, and performs the database-side
 //     safety checks the contract requires at execution time.
+//   * NOT a catalogue reader. It never serves the public list; the read model
+//     keeps its own activation rule (§2 / Stage 14K).
+//
+// Stage 14M hardened the ACTIVE-target rule at THIS boundary: a canonical row
+// whose stored `record_status` is 'rejected' is retained lineage (Stage 14K
+// Pulantubig merge), not an active catalogue record, and can never receive a
+// promotion. The refusal lives in the executor that every promotion path goes
+// through, so a future alternate caller cannot route around it.
 //
 // Trust boundary (contract §4 / mission Phases 2–3, 16): the executor
 // accepts NO caller-supplied canonical column names, values, contributor
@@ -136,6 +144,10 @@ const MAX_PROMOTION_NOTE_LENGTH = 2000;
 export type PromotionFailureReason =
   | "not_found" // contribution row missing
   | "canonical_target_not_found"
+  // Stage 14M: the target row exists but is rejected lineage, so it is outside
+  // the ACTIVE canonical dataset. Distinct from "not found" on purpose — the
+  // caller must be able to tell "wrong id" from "that record was retired".
+  | "canonical_target_rejected"
   | "not_approved"
   | "kind_not_promotable"
   | "manual_import_only" // new_location (§13)
@@ -208,17 +220,31 @@ type FreshCanonicalRow = {
   latitude: number;
   longitude: number;
   bidet_source_id: string | null;
+  // Stage 14M: the stored activation status. Read-only context for the
+  // active-target guard, exactly like `bidet_source_id` above — it is not in
+  // the writable allow-list and never reaches a SET fragment.
+  record_status: string | null;
 };
 
 const CONTRIBUTION_SELECT =
   `SELECT contribution_id, kind, target_canonical_id, contributor_user_id, status, ` +
   `payload_json, evidence_json FROM contributions WHERE contribution_id = ?`;
 
-// The snapshot columns plus the one protected context column the bidet policy
-// needs to READ (never write).
+// The snapshot columns plus the two protected context columns the bidet policy
+// and the Stage 14M active-target guard need to READ (never write). The
+// `record_status` column is why the guard can trust stored database state: the
+// value the executor compares is selected here, never accepted from a caller.
 const CANONICAL_SELECT =
   `SELECT canonical_id, updated_at, access, fee, bidet_presence, name, address, ` +
-  `latitude, longitude, bidet_source_id FROM canonical_locations WHERE canonical_id = ?`;
+  `latitude, longitude, bidet_source_id, record_status FROM canonical_locations WHERE canonical_id = ?`;
+
+// The one activation value that retires a canonical row from the active
+// catalogue while keeping it as lineage (Stage 14K). Same value the public read
+// model excludes with `WHERE record_status <> 'rejected'`; any other status
+// ('candidate', 'community-submitted', 'verified', 'disputed', 'outdated')
+// stays promotable, because retiring a record is an owner decision, not a
+// promotion-time one.
+const REJECTED_RECORD_STATUS = "rejected";
 
 async function loadContribution(
   db: D1Database,
@@ -527,6 +553,26 @@ function freshRowPolicyCheck(plan: PromotionPlan, fresh: FreshCanonicalRow): Fai
   return null;
 }
 
+// Stage 14M — the activation guard, placed with the data-integrity checks the
+// executor already performs on the freshly loaded canonical row. A rejected
+// canonical row is retained lineage (Stage 14K Pulantubig merge) and is not
+// part of the ACTIVE canonical dataset, so it can never be a promotion target.
+// Deliberately an explicit refusal rather than a silent "not found": the row
+// exists, the contribution's foreign key is still valid, and a promoter (or a
+// future alternate caller) gets a machine-readable reason instead of a lookup
+// that quietly contradicts the stored data.
+function rejectedTargetCheck(fresh: FreshCanonicalRow): Fail | null {
+  if (fresh.record_status !== REJECTED_RECORD_STATUS) return null;
+  return fail(
+    "canonical_target_rejected",
+    "the canonical target is rejected lineage and is not part of the active dataset; a rejected record can never receive a promotion",
+    {
+      canonical_id: fresh.canonical_id,
+      record_status: fresh.record_status,
+    },
+  );
+}
+
 async function proximityRecheck(
   db: PromotionDatabase,
   plan: PromotionPlan,
@@ -727,6 +773,11 @@ export async function executeCanonicalPromotion(
   // Phase 5 — fresh snapshot vs the plan's base snapshot, NULL-safe.
   const fresh = await loadCanonical(db, plan.canonical_id);
   if (!fresh) return fail("canonical_target_not_found", "canonical target row no longer exists");
+  // Stage 14M — before any value comparison or write, the target must be an
+  // ACTIVE canonical record. The status is read from the stored row, so no
+  // caller-supplied field can influence this decision.
+  const rejectedError = rejectedTargetCheck(fresh);
+  if (rejectedError) return rejectedError;
   const drift = computeDrift(plan, fresh);
   if (drift.length > 0) {
     // Never force, never auto-retry, never silently re-plan (§7): the caller
@@ -871,6 +922,12 @@ export async function planAndExecuteCanonicalPromotion(
       canonical_id: row.target_canonical_id,
     });
   }
+  // Stage 14M — the plan is built from the current canonical row, so an
+  // inactive target is refused here instead of being planned around. The
+  // executor re-applies the same guard; this is an early exit on the
+  // authoritative path, never a substitute for it.
+  const rejectedError = rejectedTargetCheck(fresh);
+  if (rejectedError) return rejectedError;
 
   // The planner needs candidate neighbours for §12; it cannot query. Fetch a
   // box only when the stored payload actually proposes a coordinate pair —
