@@ -28,6 +28,7 @@ import {
   authorizeCanonicalPromotion,
   authorizeDecision,
   authorizeRead,
+  authorizeWithdraw,
   statusForDecision,
   type Decision,
   type Identity,
@@ -313,6 +314,70 @@ export async function decideContribution(
   });
 
   return { ok: true, value: { status: toStatus } };
+}
+
+// Stage 14N — contributor self-withdrawal. This reuses the SAME Stage 13
+// lifecycle, identity, authorization, and event machinery as `decideContribution`
+// rather than inventing a parallel one: the owner-only, pre-terminal rule lives
+// in the pure `authorizeWithdraw` predicate (a moderator is NOT special here —
+// they get a 404 for someone else's row exactly like any other non-owner), the
+// row is only ever UPDATEd (never deleted), and the transition appends the
+// existing `withdrawn` event. Nothing here can touch canonical_locations,
+// canonical provenance, or the promotion ledger — withdrawal is purely a
+// contribution-lifecycle status move that preserves the original payload, the
+// canonical target reference, evidence, and contributor identity.
+//
+// The transition is a compare-and-swap: the UPDATE only lands while the row is
+// still pre-terminal. A replay of an already-withdrawn row is refused earlier by
+// `authorizeWithdraw` (a terminal status => 409), and a genuine race with a
+// concurrent decision/withdrawal matches zero rows here, so a second `withdrawn`
+// event can never be appended. `decided_at` is stamped because the schema CHECK
+// requires a decision timestamp for every terminal status (incl. `withdrawn`);
+// `decided_by` records the withdrawing contributor, not a moderator.
+export async function withdrawContribution(
+  db: D1Database,
+  identity: Identity,
+  contributionId: string,
+): Promise<StoreResult<{ contributionId: string; status: ContributionStatus }>> {
+  const row = await loadContribution(db, contributionId);
+  if (!row) return { ok: false, status: 404, error: "not found" };
+
+  const auth = authorizeWithdraw(identity, {
+    contributor_user_id: row.contributor_user_id,
+    status: row.status,
+  });
+  if (!auth.ok) return { ok: false, status: auth.status, error: auth.error };
+
+  const result = await db
+    .prepare(
+      `UPDATE contributions
+       SET status = 'withdrawn',
+           decided_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
+           decided_by = ?,
+           updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+       WHERE contribution_id = ?
+         AND status IN ('pending','validated','needs_review')`,
+    )
+    .bind(identity.userId, contributionId)
+    .run();
+
+  if ((result.meta?.changes ?? 0) === 0) {
+    // Lost a race against another transition between the load above and this
+    // guarded UPDATE. Answer with the same deterministic conflict a terminal
+    // state already yields — and append nothing.
+    return { ok: false, status: 409, error: "cannot withdraw a decided submission" };
+  }
+
+  await recordEvent(db, {
+    contributionId,
+    eventType: "withdrawn",
+    actorType: "contributor",
+    actorId: identity.userId,
+    fromStatus: row.status,
+    toStatus: "withdrawn",
+  });
+
+  return { ok: true, value: { contributionId, status: "withdrawn" as const } };
 }
 
 // The privileged canonical write — the ONLY code path that updates
