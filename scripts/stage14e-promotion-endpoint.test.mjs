@@ -9,8 +9,9 @@
 // JWKS stands in for Auth0), so identity comes only from a signed bearer token
 // — never a header/body/query field.
 //
-// It applies the committed migrations 0001–0007 to a fresh in-memory SQLite and
-// validates the canonical_promotions ledger schema there (mission Phase 7). It
+// It applies EVERY committed migration (through 0009) to a fresh in-memory
+// SQLite and validates the canonical_promotions ledger schema there (mission
+// Phase 7). It
 // NEVER touches a bound database, a Cloudflare account, or any secret, and runs
 // zero production writes.
 //
@@ -26,7 +27,7 @@ import { resolvePromoterAllowList } from "../functions/_lib/identity.ts";
 import { MAX_PROMOTION_NOTE_LENGTH } from "../lib/contributions/contract.ts";
 
 // ---------------------------------------------------------------------------
-// Database: fresh throwaway, every committed migration through 0006 (Phase 7)
+// Database: fresh throwaway, every committed migration through 0009 (Phase 7)
 // ---------------------------------------------------------------------------
 const migrationsDir = new URL("../d1/migrations/", import.meta.url);
 const sqlite = new DatabaseSync(":memory:");
@@ -91,14 +92,21 @@ assert.deepEqual(
   ].sort(),
   "canonical_promotions has exactly the frozen §5.2 columns",
 );
-// UNIQUE(contribution_id) replay gate present.
+// Index on contribution_id. Stage 14 ownership completion (migration 0009,
+// owner-approved): the §5.2 UNIQUE(contribution_id) replay gate became a plain
+// index so a §18 reversal can append a second ledger row for the same
+// contribution. Duplicate-PROMOTION protection now lives one layer up, in the
+// executor + planner (already_promoted / redundant_noop) — proven by the replay
+// cases below and the Stage 14D suite; the reversal append itself is proven
+// end-to-end by scripts/stage14o-promotion-reversal.test.mjs. An index on the
+// column must still exist for the historical lookup path.
 const indexes = sqlite.prepare("PRAGMA index_list('canonical_promotions')").all();
-const uniqueContribution = indexes.some((ix) => {
-  if (!ix.unique) return false;
+const contributionIndex = indexes.find((ix) => {
   const cols = sqlite.prepare(`PRAGMA index_info('${ix.name}')`).all().map((c) => c.name);
   return cols.length === 1 && cols[0] === "contribution_id";
 });
-assert.ok(uniqueContribution, "UNIQUE(contribution_id) index enforces the one-promotion-per-contribution gate");
+assert.ok(contributionIndex, "an index on (contribution_id) exists after 0009");
+assert.equal(contributionIndex.unique, 0, "0009 relaxed UNIQUE(contribution_id) so §18 reversals can append");
 // Foreign keys present (contribution, canonical, self-reversal).
 const fks = sqlite.prepare("PRAGMA foreign_key_list('canonical_promotions')").all().map((f) => f.table);
 assert.ok(fks.includes("contributions") && fks.includes("canonical_locations"), "ledger FKs reference contributions + canonical_locations");
@@ -350,25 +358,19 @@ const approvedA1 = await makeContribution("access_update", T1, { access: "public
   // the executor runs the Stage 14C planner first, a post-apply replay re-plans
   // against the now-current target (payload == stored value) and the planner
   // refuses it as redundant_noop (HTTP 422, outer reason invalid_plan) BEFORE
-  // the executor's UNIQUE(contribution_id) ledger pre-check (already_promoted,
-  // 409) is reached — both are correct refusals of a replay. F35 exercises the
-  // executor's own concurrent-refusal path; the SQL probe below proves the
-  // permanent UNIQUE(contribution_id) idempotency gate directly.
+  // the executor's already_promoted ledger pre-check (409) is reached — both are
+  // correct refusals of a replay. F35 exercises the executor's own concurrent-
+  // refusal path. NOTE (migration 0009, owner-approved): the §5.2
+  // UNIQUE(contribution_id) index became a plain index so a §18 reversal can
+  // append a second row for the same contribution; the load-bearing
+  // one-promotion-per-contribution gate is now the executor/planner refusal
+  // asserted here, not a database constraint. The append-vs-refuse behaviour is
+  // proven end-to-end by scripts/stage14o-promotion-reversal.test.mjs.
   const r14 = await callPromote(await tokenFor(PROMOTER), approvedA1);
   eq("C14 replay refused (non-200)", r14.status !== 200, true);
   eq("C14 replay is a planner no-op refusal", r14.json.code, "invalid_plan");
   eq("C14 replay planner_code is redundant_noop", r14.json.details?.planner_code, "redundant_noop");
   eq("C14 replay => still exactly one ledger row", count("SELECT count(*) AS c FROM canonical_promotions WHERE contribution_id = ?", approvedA1), 1);
-  const replayRow = sqlite.prepare("SELECT canonical_id FROM canonical_promotions WHERE contribution_id = ?").get(approvedA1);
-  assert.throws(
-    () => sqlite.prepare(
-      `INSERT INTO canonical_promotions (promotion_id, contribution_id, canonical_id, kind, ` +
-      `contributor_user_id, promoter_user_id, base_snapshot_json, changed_columns_json, ` +
-      `resulting_values_json, status) VALUES (?, ?, ?, 'access_update', 'c', 'p', '{}', '[]', '{}', 'promoted')`,
-    ).run("promo_" + "b".repeat(32), approvedA1, replayRow.canonical_id),
-    /UNIQUE|constraint/i,
-    "UNIQUE(contribution_id) blocks a second ledger row for the same contribution",
-  );
 
   // 15. contributor promoting their own -> 403. B7 proved this with a spoofed
   // contributor id; here we assert the plain, non-spoofed shape on a fresh

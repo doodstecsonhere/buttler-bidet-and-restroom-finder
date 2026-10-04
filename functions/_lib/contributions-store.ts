@@ -27,6 +27,7 @@ import {
   authorizeCanonicalApply,
   authorizeCanonicalPromotion,
   authorizeDecision,
+  authorizePromotionReversal,
   authorizeRead,
   authorizeWithdraw,
   statusForDecision,
@@ -34,9 +35,11 @@ import {
   type Identity,
 } from "../../lib/contributions/authorize.ts";
 import {
+  executeCanonicalPromotionReversal,
   planAndExecuteCanonicalPromotion,
   type PromotionDatabase,
   type PromotionFailureReason,
+  type ReversalFailureReason,
 } from "./canonical-promotion.ts";
 
 // A minimal D1 surface, matched by both the real Pages binding and the in-memory
@@ -549,6 +552,105 @@ export async function promoteApprovedToCanonical(
     };
   }
   return { ok: false, ...promotionFailure(result) };
+}
+
+// Stage 14 ownership completion — the promoter-facing reversal (§18). Same
+// seam shape as `promoteApprovedToCanonical`: authorize against the SEPARATE
+// promoter allow-list with the pure `authorizePromotionReversal` predicate
+// (identity from the verified token only), then hand the executor nothing but
+// the stored promotion id and the verified promoter subject. Changed columns,
+// base values, resulting values, and the canonical target are read back from
+// the ledger row itself — a caller can never smuggle a restore spec through
+// this boundary any more than a promotion spec.
+export type ReversalSuccess = {
+  reversalId: string;
+  reversesPromotionId: string;
+  canonicalId: string;
+  changedColumns: readonly string[];
+  restoredValues: Readonly<Record<string, unknown>>;
+  reversedAt: string;
+};
+
+// §18 failure classes mapped onto HTTP, mirroring `promotionFailure`.
+function reversalFailure(result: {
+  reason: ReversalFailureReason;
+  message: string;
+  details?: Record<string, unknown>;
+}): { status: number; error: string; code: string; details?: Record<string, unknown> } {
+  let status: number;
+  switch (result.reason) {
+    case "not_found":
+      status = 404;
+      break;
+    case "already_reversed":
+    case "superseded_by_later_edit":
+    case "canonical_target_rejected":
+      status = 409;
+      break;
+    case "canonical_target_not_found":
+    case "invalid_reversal":
+      status = 422;
+      break;
+    case "phase2_failed":
+      status = 500;
+      break;
+    default: {
+      const _exhaustive: never = result.reason;
+      status = 500;
+      void _exhaustive;
+    }
+  }
+  return {
+    status,
+    error: result.message,
+    code: result.reason,
+    ...(result.details ? { details: result.details } : {}),
+  };
+}
+
+export async function reverseCanonicalPromotion(
+  db: D1Database,
+  identity: Identity,
+  promotionId: string,
+  promoterUserIds: readonly string[],
+  reversalNote: string | null,
+): Promise<StoreResult<ReversalSuccess>> {
+  if (reversalNote !== null && reversalNote.length > MAX_PROMOTION_NOTE_LENGTH) {
+    return {
+      ok: false,
+      status: 413,
+      error: `reversal_note exceeds ${MAX_PROMOTION_NOTE_LENGTH} characters`,
+      code: "reversal_note_too_long",
+    };
+  }
+
+  const auth = authorizePromotionReversal(identity, promoterUserIds);
+  if (!auth.ok) {
+    return { ok: false, status: auth.status, error: auth.error, code: auth.code };
+  }
+
+  // The real D1 binding always provides `batch` (the phase-2 append needs it);
+  // the narrow D1Database surface simply never declared it. Same cast as the
+  // promotion path.
+  const result = await executeCanonicalPromotionReversal(db as unknown as PromotionDatabase, {
+    promotionId,
+    promoterUserId: identity.userId,
+    reversalNote,
+  });
+  if (result.ok) {
+    return {
+      ok: true,
+      value: {
+        reversalId: result.reversalId,
+        reversesPromotionId: result.reversesPromotionId,
+        canonicalId: result.canonicalId,
+        changedColumns: result.changedColumns,
+        restoredValues: result.restoredValues,
+        reversedAt: result.reversedAt,
+      },
+    };
+  }
+  return { ok: false, ...reversalFailure(result) };
 }
 
 async function loadContribution(

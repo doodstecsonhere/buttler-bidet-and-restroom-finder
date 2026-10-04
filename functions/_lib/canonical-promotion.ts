@@ -971,6 +971,384 @@ export async function planAndExecuteCanonicalPromotion(
 }
 
 // ---------------------------------------------------------------------------
+// Stage 14 ownership completion — guarded promotion reversal (contract §18)
+// ---------------------------------------------------------------------------
+
+// The executor reasons a reversal can refuse for, kept in the same result
+// vocabulary style as promotion so the HTTP seam maps them in one place.
+export type ReversalFailureReason =
+  | "not_found"                     // malformed / absent promotion id
+  | "invalid_reversal"              // ledger row is structurally unusable
+  | "already_reversed"              // §18: one forward append per promotion
+  | "canonical_target_not_found"    // the promoted row no longer exists
+  | "canonical_target_rejected"     // Stage 14M: retired lineage is not writable
+  | "superseded_by_later_edit"      // §18: canonical drifted from resulting values
+  | "phase2_failed";                // crash window, same residual as promotion
+
+export type ReversalResult =
+  | {
+      ok: true;
+      reversalId: string;
+      reversesPromotionId: string;
+      canonicalId: string;
+      changedColumns: readonly string[];
+      restoredValues: Readonly<Record<string, unknown>>;
+      reversedAt: string;
+    }
+  | {
+      ok: false;
+      reason: ReversalFailureReason;
+      message: string;
+      details?: Record<string, unknown>;
+    };
+
+type FailReversal = Extract<ReversalResult, { ok: false }>;
+
+function failReversal(
+  reason: ReversalFailureReason,
+  message: string,
+  details?: Record<string, unknown>,
+): FailReversal {
+  return details === undefined ? { ok: false, reason, message } : { ok: false, reason, message, details };
+}
+
+const PROMOTION_ID_RE = /^promo_[0-9a-f]{32}$/;
+
+// The stored ledger row, read back through the SAME fixed column surface as
+// every other read here. Nothing about the restore is accepted from the
+// caller: changed columns, base values, resulting values, and the target are
+// exactly what the original promotion durably recorded.
+type StoredPromotion = {
+  promotion_id: string;
+  contribution_id: string;
+  canonical_id: string;
+  kind: string;
+  contributor_user_id: string;
+  promoter_user_id: string;
+  base_snapshot_json: string;
+  changed_columns_json: string;
+  resulting_values_json: string;
+  reversal_of: string | null;
+};
+
+const PROMOTION_SELECT =
+  `SELECT promotion_id, contribution_id, canonical_id, kind, contributor_user_id, ` +
+  `promoter_user_id, base_snapshot_json, changed_columns_json, resulting_values_json, reversal_of ` +
+  `FROM canonical_promotions WHERE promotion_id = ?`;
+
+// Structural validation of the stored row against the frozen §5.2 rules. A
+// ledger row that predates or disagrees with the contract (unknown column,
+// unparsable JSON, empty change set) is refused explicitly — the executor
+// never guesses at what a malformed historical row "probably" meant.
+function validateStoredPromotion(original: StoredPromotion): FailReversal | null {
+  const changed = parseJsonOrNull(original.changed_columns_json);
+  if (!Array.isArray(changed) || changed.length === 0) {
+    return failReversal("invalid_reversal", "the promotion's changed_columns_json is missing or empty", {
+      promotion_id: original.promotion_id,
+    });
+  }
+  for (const column of changed) {
+    if (typeof column !== "string" || !WRITABLE_CANONICAL_COLUMNS.includes(column)) {
+      return failReversal("invalid_reversal", "the promotion names a column reversal may never restore", {
+        column: String(column),
+      });
+    }
+  }
+  if (new Set(changed).size !== changed.length) {
+    return failReversal("invalid_reversal", "the promotion's changed_columns_json contains a duplicate");
+  }
+  const base = parseJsonOrNull(original.base_snapshot_json);
+  const resulting = parseJsonOrNull(original.resulting_values_json);
+  if (!base || typeof base !== "object" || Array.isArray(base)) {
+    return failReversal("invalid_reversal", "the promotion's base_snapshot_json is not a JSON object");
+  }
+  if (!resulting || typeof resulting !== "object" || Array.isArray(resulting)) {
+    return failReversal("invalid_reversal", "the promotion's resulting_values_json is not a JSON object");
+  }
+  const baseRecord = base as Record<string, unknown>;
+  const resultingRecord = resulting as Record<string, unknown>;
+  for (const column of changed as string[]) {
+    if (!(column in baseRecord) || !(column in resultingRecord)) {
+      return failReversal("invalid_reversal", "the promotion's recorded values do not cover every changed column", {
+        column,
+      });
+    }
+    if (column === "latitude" || column === "longitude") {
+      // §12 pair rule holds in reverse too: a coordinate half-restore can
+      // strand the pin anywhere, and STRICT REAL binds reject non-numbers.
+      if (typeof baseRecord[column] !== "number" || !Number.isFinite(baseRecord[column] as number)) {
+        return failReversal("invalid_reversal", "the promotion's stored coordinate base value is not a finite number", {
+          column,
+        });
+      }
+    } else if (typeof baseRecord[column] !== "string") {
+      return failReversal("invalid_reversal", "the promotion's stored base value is not a string", { column });
+    }
+  }
+  // A reversal row must never itself be a reversal target of a reversal-of-
+  // reversal chain check here — §18 permits the chain (each is a fresh
+  // forward append); this guard only refuses restoring a row that was NOT a
+  // real promotion (there is no such row today: status is CHECK-pinned).
+  if (original.kind === "new_location") {
+    return failReversal("invalid_reversal", "new_location has no promotion path, so it has no reversal path");
+  }
+  return null;
+}
+
+// Which of the eight CAS values currently differ from what the promotion
+// recorded as its outcome. §18's restore precondition is exactly this set
+// being empty for the CHANGED columns; drift elsewhere is caught by the
+// guarded UPDATE as `stale_snapshot`-style refusal below.
+function reversalOutcomeDrift(
+  original: { changed_columns: string[]; resulting: Record<string, unknown> },
+  fresh: FreshCanonicalRow,
+): DriftEntry[] {
+  const drift: DriftEntry[] = [];
+  for (const column of original.changed_columns) {
+    const expected = original.resulting[column];
+    const current = (fresh as unknown as Record<string, unknown>)[column];
+    if (!sameValue(expected, current)) {
+      drift.push({ column, base_value: expected, current_value: current ?? null });
+    }
+  }
+  return drift;
+}
+
+export type ReversalExecutionInput = {
+  // The promotion to reverse, by stored ledger id. Nothing else about the
+  // restore is accepted from the caller.
+  promotionId: string;
+  // Recorded for attribution; authorization is decided by the 14E-class seam,
+  // not here (same split as promotion).
+  promoterUserId: string;
+  reversalNote?: string | null;
+};
+
+/**
+ * The §18 guarded reversal: restore EXACTLY what one promotion changed, as a
+ * new forward-appended ledger row. Two-phase write with the same documented
+ * crash window as promotion (§6): a CAS-guarded canonical UPDATE alone, then
+ * ONE db.batch() appending the ledger row (`reversal_of` linked, carrying its
+ * own freshly-captured base snapshot) and the audit event. Refuses — and
+ * writes nothing — unless the canonical row still equals the original
+ * promotion's recorded outcome for every changed column, the target is still
+ * an ACTIVE canonical record (Stage 14M), and no reversal of this promotion
+ * exists yet. History is never edited or deleted: the original row stays.
+ */
+export async function executeCanonicalPromotionReversal(
+  db: PromotionDatabase,
+  input: ReversalExecutionInput,
+): Promise<ReversalResult> {
+  if (typeof input.promoterUserId !== "string" || input.promoterUserId.length === 0) {
+    return failReversal("invalid_reversal", "executor needs a promoter id to record for attribution");
+  }
+  const note = input.reversalNote ?? null;
+  if (note !== null && (typeof note !== "string" || note.length > MAX_PROMOTION_NOTE_LENGTH)) {
+    return failReversal("invalid_reversal", "reversal note is missing or too long", {
+      max: MAX_PROMOTION_NOTE_LENGTH,
+    });
+  }
+  if (typeof input.promotionId !== "string" || !PROMOTION_ID_RE.test(input.promotionId)) {
+    return failReversal("not_found", "promotion not found");
+  }
+
+  // 1. The original promotion row, read from the ledger (the sole authority).
+  const original = await db.prepare(PROMOTION_SELECT).bind(input.promotionId).first<StoredPromotion>();
+  if (!original) return failReversal("not_found", "promotion not found");
+  const structural = validateStoredPromotion(original);
+  if (structural) return structural;
+  const changedColumns = parseJsonOrNull(original.changed_columns_json) as string[];
+  const baseSnapshot = parseJsonOrNull(original.base_snapshot_json) as Record<string, unknown>;
+  const resultingValues = parseJsonOrNull(original.resulting_values_json) as Record<string, unknown>;
+
+  // 2. One §18 forward append per promotion. UNIQUE(contribution_id) was
+  // relaxed by migration 0009 precisely so the reversal row can exist; this
+  // pre-check keeps a second reversal of the SAME promotion a clean
+  // deterministic refusal (the phase-2 batch below carries the guard into
+  // the transaction for the race case).
+  const existingReversal = await db
+    .prepare(`SELECT promotion_id FROM canonical_promotions WHERE reversal_of = ?`)
+    .bind(original.promotion_id)
+    .first<{ promotion_id: string }>();
+  if (existingReversal) {
+    return failReversal("already_reversed", "this promotion has already been reversed; repeats change nothing", {
+      reversal_id: existingReversal.promotion_id,
+    });
+  }
+
+  // 3. Fresh canonical state: exists, is ACTIVE (Stage 14M), and still equals
+  // the original promotion's recorded outcome (§18). Drift on the changed
+  // columns is the contract's `superseded_by_later_edit` — the corrective-
+  // contribution path takes over from there. Drift on the OTHER snapshot
+  // values (updated_at etc.) is caught by the CAS guard in step 5.
+  const fresh = await loadCanonical(db, original.canonical_id);
+  if (!fresh) return failReversal("canonical_target_not_found", "canonical target row no longer exists");
+  const rejectedError = rejectedTargetCheck(fresh);
+  if (rejectedError) {
+    return failReversal(
+      "canonical_target_rejected",
+      "the canonical target is rejected lineage and is not part of the active dataset; a rejected record can never be written by a reversal",
+      rejectedError.details,
+    );
+  }
+  const outcomeDrift = reversalOutcomeDrift(
+    { changed_columns: changedColumns, resulting: resultingValues },
+    fresh,
+  );
+  if (outcomeDrift.length > 0) {
+    return failReversal("superseded_by_later_edit", "canonical data changed after this promotion; a reversal only restores an untouched outcome, so use a corrective contribution", {
+      drift: outcomeDrift,
+    });
+  }
+
+  // 4. Bi-directional §8 sanity (defense in depth; unreachable for rows this
+  // executor promoted, because a promotion never writes a CHECK-violating
+  // state): restoring the base values of a surveyed row cannot demote a
+  // surveyed Yes.
+  if (changedColumns.includes("bidet_presence")) {
+    const restored = baseSnapshot.bidet_presence;
+    if (fresh.bidet_source_id !== null && fresh.bidet_source_id !== undefined && restored === "Unknown") {
+      return failReversal("invalid_reversal", "the stored base snapshot would downgrade a surveyed bidet; only a re-survey may do that");
+    }
+  }
+
+  // 5. Phase 1: guarded CAS UPDATE. SET the changed columns back to their
+  // stored base values; WHERE matches ALL EIGHT current snapshot values with
+  // NULL-safe `IS` — the fresh row's values, which step 3 proved equal the
+  // original outcome for the changed columns. Zero matches means a concurrent
+  // write landed between the read and the UPDATE; never a force.
+  const orderedColumns = WRITABLE_CANONICAL_COLUMNS.filter((column) => changedColumns.includes(column));
+  const setParts = orderedColumns.map((column) => SET_FRAGMENTS[column]);
+  const values: unknown[] = orderedColumns.map((column) => baseSnapshot[column] ?? null);
+  const sql =
+    `UPDATE canonical_locations ` +
+    `SET ${setParts.join(", ")}, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') ` +
+    `WHERE canonical_id = ? ` +
+    SNAPSHOT_COLUMNS.map((column) => `AND ${column} IS ?`).join(" ");
+  values.push(original.canonical_id);
+  for (const column of SNAPSHOT_COLUMNS) {
+    values.push((fresh as unknown as Record<string, unknown>)[column] ?? null);
+  }
+  const updateResult = await db.prepare(sql).bind(...values).run();
+  if ((updateResult.meta?.changes ?? 0) !== 1) {
+    const now = await loadCanonical(db, original.canonical_id);
+    return failReversal("superseded_by_later_edit", "the compare-and-swap guard matched no rows; canonical changed concurrently", {
+      drift: now
+        ? SNAPSHOT_COLUMNS.filter((column) =>
+            !sameValue(
+              (now as unknown as Record<string, unknown>)[column],
+              (fresh as unknown as Record<string, unknown>)[column],
+            ),
+          ).map((column) => ({
+            column,
+            base_value: (fresh as unknown as Record<string, unknown>)[column] ?? null,
+            current_value: (now as unknown as Record<string, unknown>)[column] ?? null,
+          }))
+        : [],
+      concurrent: true,
+    });
+  }
+
+  // 6. Phase 2: ledger append + audit event, ONE atomic batch (same §6
+  // semantics and the same residual crash window as promotion). The reversal
+  // row carries ITS OWN freshly captured base snapshot (the values the CAS
+  // just matched — `pickSnapshot`-shaped), the same changed columns, the
+  // restored values, `reversal_of` linked, and a self-describing note so the
+  // append is unambiguous even without the FK join. Concurrent double-reversal
+  // is already prevented one layer up: only ONE reversal can win the phase-1
+  // compare-and-swap (a second sees the flipped value and refuses as
+  // `superseded_by_later_edit`), and a repeat AFTER commit is caught by the
+  // step-2 `already_reversed` pre-check. So this event insert mirrors the
+  // promotion path's plain atomic append — it needs no self-referential guard
+  // (one would be self-defeating, since this very batch just wrote the
+  // `reversal_of` link a NOT-EXISTS probe would then find).
+  const reversalId = newPromotionId();
+  const reversalLedgerNote = note ?? `Reversal of promotion ${original.promotion_id} (Stage 14 contract \u00a718).`;
+  const eventDetail = {
+    action: "canonical_promotion_reversed",
+    reversal_id: reversalId,
+    reverses_promotion_id: original.promotion_id,
+    canonical_id: original.canonical_id,
+    changed_columns: [...changedColumns],
+  };
+  try {
+    await db.batch([
+      db.prepare(
+        `INSERT INTO canonical_promotions ` +
+        `(promotion_id, contribution_id, canonical_id, kind, contributor_user_id, promoter_user_id, ` +
+        `base_snapshot_json, changed_columns_json, resulting_values_json, status, reversal_of, promotion_note) ` +
+        `VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'promoted', ?, ?)`,
+      ).bind(
+        reversalId,
+        original.contribution_id,
+        original.canonical_id,
+        original.kind,
+        original.contributor_user_id,
+        input.promoterUserId,
+        JSON.stringify(snapshotFromFreshRow(fresh)),
+        JSON.stringify([...changedColumns]),
+        JSON.stringify(restoredValuesMap(changedColumns, baseSnapshot)),
+        original.promotion_id,
+        reversalLedgerNote,
+      ),
+      db.prepare(
+        `INSERT INTO contribution_events ` +
+        `(event_id, contribution_id, event_type, actor_type, actor_id, from_status, to_status, detail_json) ` +
+        `VALUES (?, ?, 'status_change', 'moderator', ?, 'approved', 'approved', ?)`,
+      ).bind(
+        newEventId(),
+        original.contribution_id,
+        input.promoterUserId,
+        JSON.stringify(eventDetail),
+      ),
+    ]);
+  } catch (error) {
+    // Same crash window as promotion: canonical restored, evidence not
+    // committed. Success is NEVER claimed; the read-only reconciliation
+    // reports the mismatch honestly for a human to adjudicate.
+    return failReversal("phase2_failed", "canonical was restored but the reversal ledger/event batch failed; the reversal must be reconciled", {
+      canonical_id: original.canonical_id,
+      expected_reversal_id: reversalId,
+      reverses_promotion_id: original.promotion_id,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+
+  const reversedAtRow = await db
+    .prepare(`SELECT promoted_at FROM canonical_promotions WHERE promotion_id = ?`)
+    .bind(reversalId)
+    .first<{ promoted_at: string }>();
+
+  return {
+    ok: true,
+    reversalId,
+    reversesPromotionId: original.promotion_id,
+    canonicalId: original.canonical_id,
+    changedColumns: [...changedColumns],
+    restoredValues: restoredValuesMap(changedColumns, baseSnapshot),
+    reversedAt: reversedAtRow?.promoted_at ?? "",
+  };
+}
+
+// The eight CAS values of an already-loaded fresh row, in the same shape the
+// promotion path serializes (so reversal rows are ledger-homogeneous).
+function snapshotFromFreshRow(fresh: FreshCanonicalRow): Record<string, unknown> {
+  const source = fresh as unknown as Record<string, unknown>;
+  const out: Record<string, unknown> = {};
+  for (const column of SNAPSHOT_COLUMNS) out[column] = source[column] ?? null;
+  return out;
+}
+
+function restoredValuesMap(
+  changedColumns: readonly string[],
+  baseSnapshot: Record<string, unknown>,
+): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const column of changedColumns) out[column] = baseSnapshot[column] ?? null;
+  return out;
+}
+
+// ---------------------------------------------------------------------------
 // Phase 10 — crash-window reconciliation (READ-ONLY)
 // ---------------------------------------------------------------------------
 
