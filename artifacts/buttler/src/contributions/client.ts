@@ -93,6 +93,26 @@ export interface SubmissionReceipt {
   status: string;
 }
 
+// Stage 14 promotion/reversal receipts mirror the executor's camelCase success
+// body (`functions/_lib/contributions-store.ts`), which is what the endpoints
+// echo on a 200. Only the fields the promoter console needs are read back; a
+// wrong shape is an honest service error, never a half-parse.
+export interface PromotionReceipt {
+  promotionId: string;
+  canonicalId: string;
+  changedColumns: string[];
+  promotedAt: string | null;
+}
+
+export interface ReversalReceipt {
+  reversalId: string;
+  reversesPromotionId: string;
+  canonicalId: string;
+  changedColumns: string[];
+  restoredValues: Record<string, unknown>;
+  reversedAt: string | null;
+}
+
 // ---------------------------------------------------------------------------
 // Request construction (pure, fully unit-testable)
 // ---------------------------------------------------------------------------
@@ -292,6 +312,25 @@ export interface ContributionsClient {
     decision: "approve" | "reject",
     note: string,
   ): Promise<ContributionResult<{ status: string }>>;
+  /**
+   * Stage 14E canonical promotion (§15/§16). The ONLY client-supplied field is
+   * an optional note; canonical_id, kind, changed columns, values, snapshots,
+   * and every identity come from the stored row + the verified token. Whether
+   * this caller is a promoter is decided entirely server-side (403 otherwise).
+   */
+  promote(
+    contributionId: string,
+    note: string,
+  ): Promise<ContributionResult<PromotionReceipt>>;
+  /**
+   * Stage 14 §18 guarded reversal of an existing promotion. Like promote, the
+   * body carries only an optional note — the ledger row is the sole authority
+   * on what gets restored, and the promoter gate is enforced server-side.
+   */
+  reverse(
+    promotionId: string,
+    note: string,
+  ): Promise<ContributionResult<ReversalReceipt>>;
 }
 
 export function createContributionsClient(deps: ContributionsClientDeps): ContributionsClient {
@@ -392,6 +431,76 @@ export function createContributionsClient(deps: ContributionsClientDeps): Contri
         (payload) => {
           const value = payload as { status?: unknown };
           return typeof value?.status === "string" ? { status: value.status } : null;
+        },
+      );
+    },
+
+    promote(contributionId, note) {
+      return send(
+        () =>
+          request(
+            `/api/moderation/contributions/${encodeURIComponent(contributionId)}/promotion`,
+            {
+              method: "POST",
+              headers: { "Content-Type": "application/json", Accept: "application/json" },
+              body: JSON.stringify({ promotion_note: note.trim() ? note.trim() : null }),
+            },
+          ),
+        (payload) => {
+          const value = payload as {
+            promotionId?: unknown;
+            canonicalId?: unknown;
+            changedColumns?: unknown;
+            promotedAt?: unknown;
+          };
+          if (typeof value?.promotionId !== "string") return null;
+          return {
+            promotionId: value.promotionId,
+            canonicalId: typeof value.canonicalId === "string" ? value.canonicalId : "",
+            changedColumns: Array.isArray(value.changedColumns)
+              ? (value.changedColumns.filter((c) => typeof c === "string") as string[])
+              : [],
+            promotedAt: typeof value.promotedAt === "string" ? value.promotedAt : null,
+          };
+        },
+      );
+    },
+
+    reverse(promotionId, note) {
+      return send(
+        () =>
+          request(
+            `/api/moderation/promotions/${encodeURIComponent(promotionId)}/reversal`,
+            {
+              method: "POST",
+              headers: { "Content-Type": "application/json", Accept: "application/json" },
+              body: JSON.stringify({ reversal_note: note.trim() ? note.trim() : null }),
+            },
+          ),
+        (payload) => {
+          const value = payload as {
+            reversalId?: unknown;
+            reversesPromotionId?: unknown;
+            canonicalId?: unknown;
+            changedColumns?: unknown;
+            restoredValues?: unknown;
+            reversedAt?: unknown;
+          };
+          if (typeof value?.reversalId !== "string") return null;
+          return {
+            reversalId: value.reversalId,
+            reversesPromotionId:
+              typeof value.reversesPromotionId === "string" ? value.reversesPromotionId : "",
+            canonicalId: typeof value.canonicalId === "string" ? value.canonicalId : "",
+            changedColumns: Array.isArray(value.changedColumns)
+              ? (value.changedColumns.filter((c) => typeof c === "string") as string[])
+              : [],
+            restoredValues:
+              value.restoredValues && typeof value.restoredValues === "object"
+                ? (value.restoredValues as Record<string, unknown>)
+                : {},
+            reversedAt: typeof value.reversedAt === "string" ? value.reversedAt : null,
+          };
         },
       );
     },
