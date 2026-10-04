@@ -19,6 +19,7 @@
     "test:stage14c-planner": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/stage14c-promotion-planner.test.mjs",
     "test:stage14d-executor": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/stage14d-promotion-executor.test.mjs",
     "test:stage14e-endpoint": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/stage14e-promotion-endpoint.test.mjs",
+    "test:stage14m-rejected-target": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/stage14m-rejected-target-safety.test.mjs",
     "test:stage14k-reconciliation": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/stage14k-canonical-reconciliation.test.mjs",
     "test:stage14k1-parity": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/stage14k1-reconciliation-parity.test.mjs",
     "import:canonical:validate": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/import-canonical.mjs --validate",
