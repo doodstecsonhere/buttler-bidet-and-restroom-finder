@@ -6,6 +6,46 @@ All notable changes to Buttler are documented here.
 
 ### Added
 
+- Stage 14 COMPLETE — canonical change promotion and reversal, now live in
+  production. Approved community contributions can be promoted into the
+  canonical read model through a guarded, server-side-only path, and every
+  promotion can be exactly reversed:
+  - Promotion lifecycle: `submit -> moderate/approve -> promote -> (reverse)`,
+    with contributor self-withdrawal for pre-decision submissions.
+  - Authenticated authorization (real Auth0 tokens, fail-closed): promotion
+    and reversal require membership in the server-side `BUTTLER_PROMOTER_IDS`
+    allow-list, kept SEPARATE from the moderator allow-list — moderator
+    status alone never grants promotion, and self-promotion of one's own
+    contribution is refused.
+  - Optimistic concurrency: a stale canonical snapshot is refused with a
+    drift report; the canonical write uses compare-and-set so concurrent
+    requests can never silently overwrite newer data.
+  - Rejected-target protection: promotion into a retired/rejected canonical
+    row is structurally refused (Stage 14M).
+  - Append-only promotion ledger (`canonical_promotions`, migrations `0006`
+    + `0009`, both applied to production): each promotion is one ledger row
+    with base snapshot, changed columns, resulting values, and note;
+    reversal appends a linked row (`reversal_of`) instead of editing or
+    deleting history, and append-only audit events accompany both.
+  - Replay protection: `UNIQUE(contribution_id)` plus the executor's gates
+    make a second promotion of the same contribution permanently impossible.
+  - Safety rules enforced by the planner: coordinate bounds and proximity
+    guards, bidet downgrade protection (surveyed rows can never be silently
+    downgraded), malformed/smuggled request-body fields ignored or refused,
+    and redundant no-op payloads refused without any write.
+  - Reconciliation detection for interrupted two-phase writes (Stage 14K).
+  - Promoter console UI (`/promotions`) so a signed-in promoter can exercise
+    promote and reverse through the real authenticated HTTP path.
+  - Production click-through proving: the full submit -> approve -> promote -
+    > reverse cycle was demonstrated on live production with real Auth0
+    accounts, including the negative paths (unauthenticated 401, non-promoter
+    403, replay 409) which were proven side-effect-free; the one controlled
+    canonical test value (`fee` on the proven test row) was restored to its
+    pre-test value, so the promotion/reversal pair leaves zero net content
+    change and only append-only history remains.
+  - Production API/offline parity held throughout: the live `/api/restrooms`
+    projection and the bundled offline catalogue remain the identical 776-row
+    active set.
 - Stage 14G: one genuinely new canonical location — the Department of
   Information and Communications Technology (DICT), Dumaguete — from the
   owner's firsthand 2026-10-01 field survey (restroom and bidet present,
@@ -15,7 +55,8 @@ All notable changes to Buttler are documented here.
   (the applied `0001`–`0006` files are frozen history) with the matching
   `d1/rollback/0007_delete_added_canonical_locations.sql`; the dataset grows to
   777 canonical / 847 provenance rows and 115 bidet-positive locations
-  (preparation only: no production migration or deployment was performed).
+  (the `0007` addition has since been applied to production as part of the
+  Stage 14 completion window).
 - Stage 14K.1: post-base canonical reconciliation layer. Owner decisions
   that merge a canonical duplicate after the frozen seed are recorded as
   ordered operations in
@@ -29,12 +70,12 @@ All notable changes to Buttler are documented here.
   field-verified bidet/restroom state), so offline and the post-0008 live
   API projection agree. Migrations `0001`–`0007` and the owner CSVs remain
   byte-frozen; rejected lineage rows are retained in D1 for contribution
-  foreign keys and audit (preparation only: `0008` is not applied to
-  production).
+  foreign keys and audit (`0008` has since been applied to production as
+  part of the Stage 14 completion window).
 - The `/api/restrooms` public contract now derives a `bidet_evidence` field
   (`field_verified` / `osm_explicit` / `unknown`) from the canonical
   verification column: 98 survey-verified and 16 map-reported bidets
-  (development branch only; production D1 is unchanged).
+  (this field is now served by the live production API).
 - `scripts/generate-bundled-catalogue.mjs` generates the PWA's offline
   catalogue (`lib/restroom-bundle.ts`) from the canonical 776-row dataset.
 - The restroom loader keeps a last-known-good canonical API response on the
